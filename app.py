@@ -1,7 +1,9 @@
 """
 app.py
 Interfaz Streamlit del Perfil de Personalidad Vocacional RIASEC.
-Pestañas: Cuestionario | Visualización y filtros | Estadística descriptiva |
+Dashboard profesional estilo CoreUI — Light Mode.
+
+Pestañas: Dashboard | Carga y visualización | Estadística descriptiva |
 Entrenamiento | Resultados | Comparativa entre clústeres | Metadatos del modelo | Descargas.
 
 Ejecutar con: streamlit run app.py
@@ -23,8 +25,309 @@ from cuestionario import PREGUNTAS, DIMENSIONES, NOMBRES_DIMENSION, agregar_vect
 from estadistica import media, desviacion_estandar, moda, mediana, distribucion_por_categoria, resumen_dimensiones
 from entrenamiento import entrenar_modelo, cargar_modelo_activo, obtener_matriz_entrenamiento, proyeccion_pca_2d
 
-st.set_page_config(page_title="RIASEC - Análisis No Supervisado", layout="wide")
+# --------------------------------------------------------------------------
+# Configuración de página
+# --------------------------------------------------------------------------
+st.set_page_config(
+    page_title="RIASEC · Dashboard Vocacional",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 init_db()
+
+# --------------------------------------------------------------------------
+# CSS Global — Estilo CoreUI Light
+# --------------------------------------------------------------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/*  Reset y base  */
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif !important;
+}
+
+/*  Fondo principal  */
+.main .block-container {
+    background-color: #F4F6F9;
+    padding: 1.5rem 2rem 2rem 2rem;
+    max-width: 1400px;
+}
+.stApp {
+    background-color: #F4F6F9;
+}
+
+/*  Sidebar  */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #1B2A4A 0%, #243452 100%) !important;
+    border-right: none;
+    box-shadow: 4px 0 15px rgba(0,0,0,0.12);
+}
+[data-testid="stSidebar"] * {
+    color: #C8D3E8 !important;
+}
+[data-testid="stSidebar"] .stRadio label {
+    color: #A8B8D8 !important;
+    font-size: 0.875rem !important;
+    font-weight: 400;
+    padding: 0.35rem 0;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+[data-testid="stSidebar"] .stRadio label:hover {
+    color: #FFFFFF !important;
+}
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255,255,255,0.1) !important;
+    margin: 0.75rem 0;
+}
+
+/*  Logo sidebar  */
+.sidebar-logo {
+    text-align: center;
+    padding: 1.5rem 1rem 1rem 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    margin-bottom: 1rem;
+}
+.sidebar-logo h1 {
+    color: #FFFFFF !important;
+    font-size: 1.6rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 4px;
+    margin: 0;
+}
+.sidebar-logo p {
+    color: #7B97C7 !important;
+    font-size: 0.7rem !important;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin: 0.2rem 0 0 0;
+}
+
+/*  KPI Cards  */
+.kpi-card {
+    background: #FFFFFF;
+    border-radius: 12px;
+    padding: 1.4rem 1.6rem;
+    box-shadow: 0 2px 12px rgba(27, 42, 74, 0.08);
+    border-left: 4px solid #3B82F6;
+    transition: transform 0.2s, box-shadow 0.2s;
+    height: 100%;
+}
+.kpi-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(27, 42, 74, 0.14);
+}
+.kpi-card.green  { border-left-color: #22C55E; }
+.kpi-card.orange { border-left-color: #F59E0B; }
+.kpi-card.violet { border-left-color: #8B5CF6; }
+.kpi-card.blue   { border-left-color: #3B82F6; }
+.kpi-icon {
+    font-size: 1.8rem;
+    margin-bottom: 0.5rem;
+    line-height: 1;
+}
+.kpi-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #1B2A4A;
+    line-height: 1.1;
+}
+.kpi-label {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: #6B7280;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-top: 0.25rem;
+}
+.kpi-sub {
+    font-size: 0.7rem;
+    color: #9CA3AF;
+    margin-top: 0.2rem;
+}
+
+/*  Títulos de sección  */
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid #E5E7EB;
+}
+.section-header h2 {
+    font-size: 1.35rem !important;
+    font-weight: 700 !important;
+    color: #1B2A4A !important;
+    margin: 0 !important;
+}
+.section-badge {
+    background: #EEF2FF;
+    color: #3B82F6;
+    border-radius: 6px;
+    padding: 0.15rem 0.6rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+/*  Panel/Card contenedor  */
+.panel-card {
+    background: #FFFFFF;
+    border-radius: 12px;
+    padding: 1.5rem;
+    box-shadow: 0 2px 12px rgba(27, 42, 74, 0.07);
+    margin-bottom: 1.25rem;
+    border: 1px solid #F0F2F6;
+}
+.panel-card h4 {
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    color: #374151 !important;
+    margin-bottom: 0.75rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/*  Métricas de Streamlit  */
+[data-testid="metric-container"] {
+    background: #FFFFFF;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    box-shadow: 0 2px 8px rgba(27, 42, 74, 0.07);
+    border: 1px solid #F0F2F6;
+}
+[data-testid="metric-container"] label {
+    color: #6B7280 !important;
+    font-size: 0.78rem !important;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+[data-testid="metric-container"] [data-testid="stMetricValue"] {
+    color: #1B2A4A !important;
+    font-weight: 700 !important;
+}
+
+/*  Tablas  */
+.stDataFrame {
+    border-radius: 10px !important;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(27, 42, 74, 0.07);
+    border: 1px solid #E5E7EB !important;
+}
+
+/*  Botones  */
+.stButton > button {
+    background: linear-gradient(135deg, #2563EB, #3B82F6) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    font-size: 0.875rem !important;
+    padding: 0.55rem 1.5rem !important;
+    transition: all 0.2s !important;
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3) !important;
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, #1D4ED8, #2563EB) !important;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4) !important;
+    transform: translateY(-1px) !important;
+}
+
+/*  Inputs y Selects  */
+.stSelectbox > div > div,
+.stMultiSelect > div > div,
+.stNumberInput > div > div > input,
+.stTextInput > div > div > input {
+    border-radius: 8px !important;
+    border-color: #D1D5DB !important;
+    font-family: 'Inter', sans-serif !important;
+}
+.stSelectbox > div > div:focus-within,
+.stTextInput > div > div:focus-within {
+    border-color: #3B82F6 !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
+}
+
+/*  Alertas / Info boxes  */
+.stInfo {
+    background: #EFF6FF !important;
+    border-color: #BFDBFE !important;
+    color: #1E40AF !important;
+    border-radius: 8px !important;
+}
+.stSuccess {
+    border-radius: 8px !important;
+}
+.stError {
+    border-radius: 8px !important;
+}
+
+/*  Spinner  */
+.stSpinner > div {
+    border-color: #3B82F6 !important;
+}
+
+/*  Badge de estado  */
+.badge-active {
+    display: inline-block;
+    background: #D1FAE5;
+    color: #065F46;
+    border-radius: 20px;
+    padding: 0.2rem 0.75rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+.badge-inactive {
+    display: inline-block;
+    background: #F3F4F6;
+    color: #6B7280;
+    border-radius: 20px;
+    padding: 0.2rem 0.75rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+/*  Dividers  */
+hr {
+    border-color: #E5E7EB !important;
+    margin: 1.5rem 0 !important;
+}
+
+/*  Títulos principales  */
+h1 { color: #1B2A4A !important; font-weight: 700 !important; }
+h2 { color: #1B2A4A !important; font-weight: 600 !important; }
+h3 { color: #374151 !important; font-weight: 600 !important; }
+
+/*  Download button  */
+[data-testid="stDownloadButton"] > button {
+    background: linear-gradient(135deg, #059669, #10B981) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    box-shadow: 0 2px 6px rgba(5, 150, 105, 0.3) !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+    background: linear-gradient(135deg, #047857, #059669) !important;
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.4) !important;
+    transform: translateY(-1px) !important;
+}
+
+/*  Plotly charts  */
+.js-plotly-plot .plotly .main-svg {
+    border-radius: 10px;
+}
+
+/*  Ocultar menú hamburguesa y footer de Streamlit  */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+header { visibility: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
 
 # --------------------------------------------------------------------------
 # Utilidades de datos
@@ -67,88 +370,273 @@ def resultados_a_dataframe(modelo_id=None):
         session.close()
 
 
+def kpi_card(value, label, sub="", color="blue"):
+    return f"""
+    <div class="kpi-card {color}">
+        <div class="kpi-value">{value}</div>
+        <div class="kpi-label">{label}</div>
+        {"<div class='kpi-sub'>" + sub + "</div>" if sub else ""}
+    </div>
+    """
+
+
+def section_header(title, badge=""):
+    badge_html = f'<span class="section-badge">{badge}</span>' if badge else ""
+    st.markdown(f"""
+    <div class="section-header">
+        <h2>{title}</h2>
+        {badge_html}
+    </div>
+    """, unsafe_allow_html=True)
+
+
 # --------------------------------------------------------------------------
-# Barra lateral: navegacion
+# Barra lateral
 # --------------------------------------------------------------------------
-st.sidebar.title("RIASEC · Unidad IV")
+st.sidebar.markdown("""
+<div class="sidebar-logo">
+    <h1>RIASEC</h1>
+    <p>Análisis Vocacional · Unidad IV</p>
+</div>
+""", unsafe_allow_html=True)
+
 pestana = st.sidebar.radio(
-    "Ir a:",
-    ["1. Responder cuestionario", "2. Carga y visualización", "3. Estadística descriptiva",
-     "4. Entrenamiento del modelo", "5. Resultados", "6. Comparativa de clústeres",
-     "7. Metadatos del modelo", "8. Descargas"]
+    "Navegación",
+    [
+        "Dashboard",
+        "Carga y Visualización",
+        "Estadística Descriptiva",
+        "Entrenamiento del Modelo",
+        "Resultados",
+        "Comparativa de Clústeres",
+        "Metadatos del Modelo",
+        "Descargas",
+    ],
+    label_visibility="collapsed",
 )
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("""
+<div style="padding: 0.5rem 0; color: #7B97C7; font-size: 0.7rem; text-align: center; letter-spacing: 0.5px;">
+    RIASEC · Gaussian Mixture Model<br>
+    <span style="color: #4A6B9A;">Análisis No Supervisado</span>
+</div>
+""", unsafe_allow_html=True)
+
+
 # --------------------------------------------------------------------------
-# 1. CUESTIONARIO
+# 0. DASHBOARD
 # --------------------------------------------------------------------------
-if pestana == "1. Responder cuestionario":
-    st.title("Cuestionario de Perfil Vocacional (RIASEC)")
-    st.caption("18 preguntas ponderadas + 1 pregunta demográfica (no ponderada).")
+if pestana == "Dashboard":
+    section_header("Dashboard", "General")
 
-    with st.form("form_cuestionario"):
-        sexo = st.radio("Selecciona tu sexo", ["Hombre", "Mujer"])
-        edad = st.number_input("Edad", min_value=10, max_value=99, value=20)
-        carrera = st.text_input("¿Qué carrera o área te interesa? (opcional)")
+    df = usuarios_a_dataframe()
+    modelo, registro = cargar_modelo_activo()
 
-        respuestas_peso = {}
-        for numero, dimension, texto, opciones in PREGUNTAS:
-            if dimension == "DEMOGRAFICA":
-                continue
-            etiquetas_opcion = [o[0] for o in opciones]
-            seleccion = st.radio(f"{numero}. {texto}", etiquetas_opcion, key=f"p{numero}")
-            peso = next(o[1] for o in opciones if o[0] == seleccion)
-            respuestas_peso[numero] = peso
+    #  KPI Cards 
+    c1, c2, c3, c4 = st.columns(4)
 
-        enviado = st.form_submit_button("Enviar respuestas")
+    total_usuarios = len(df)
+    with c1:
+        st.markdown(kpi_card(str(total_usuarios), "Usuarios Registrados",
+            sub="Total en base de datos", color="blue"
+        ), unsafe_allow_html=True)
 
-    if enviado:
-        session = get_session()
-        try:
-            usuario = Usuario(sexo=sexo, edad=edad, carrera_interes=carrera or None,
-                               fecha_registro=datetime.datetime.utcnow())
-            session.add(usuario)
-            session.flush()
+    if modelo is not None:
+        n_componentes_activo = registro.n_componentes
+        silhouette_val = registro.silhouette_score
+        algo = registro.algoritmo
+        n_registros_ent = registro.n_registros_entrenamiento
 
-            preguntas_bd = {p.numero: p for p in session.query(Pregunta).all()}
-            for numero, dimension, texto, opciones in PREGUNTAS:
-                pregunta_bd = preguntas_bd[numero]
-                if dimension == "DEMOGRAFICA":
-                    opcion_bd = next(o for o in pregunta_bd.opciones
-                                     if o.texto_opcion == (sexo))
-                    session.add(Respuesta(usuario_id=usuario.id, pregunta_id=pregunta_bd.id,
-                                           opcion_id=opcion_bd.id, peso_obtenido=None))
-                    continue
-                peso = respuestas_peso[numero]
-                opcion_bd = next(o for o in pregunta_bd.opciones if o.peso == peso)
-                session.add(Respuesta(usuario_id=usuario.id, pregunta_id=pregunta_bd.id,
-                                       opcion_id=opcion_bd.id, peso_obtenido=peso))
+        with c2:
+            st.markdown(kpi_card(f"{n_componentes_activo}", "Clústeres Activos",
+                sub=f"{algo}", color="violet"
+            ), unsafe_allow_html=True)
 
-            vector = agregar_vector(respuestas_peso)
-            session.add(VectorRiasec(usuario_id=usuario.id, **{k.lower(): v for k, v in vector.items()}))
-            session.commit()
-            st.success(f"Respuestas guardadas (usuario #{usuario.id}). Vector RIASEC: {vector}")
-        finally:
+        with c3:
+            sil_str = f"{silhouette_val:.4f}" if silhouette_val is not None else "N/A"
+            sil_sub = "Bueno >0.5" if silhouette_val and silhouette_val > 0.5 else "Aceptable >0.3" if silhouette_val and silhouette_val > 0.3 else "—"
+            st.markdown(kpi_card(sil_str, "Silhouette Score",
+                sub=sil_sub, color="green"
+            ), unsafe_allow_html=True)
+
+        with c4:
+            st.markdown(kpi_card(str(n_registros_ent), "Registros Entrenados",
+                sub=f"Modelo #{registro.id}", color="orange"
+            ), unsafe_allow_html=True)
+    else:
+        with c2:
+            st.markdown(kpi_card("—", "Clústeres Activos", sub="Sin modelo entrenado", color="violet"), unsafe_allow_html=True)
+        with c3:
+            st.markdown(kpi_card("—", "Silhouette Score", sub="Entrenar modelo primero", color="green"), unsafe_allow_html=True)
+        with c4:
+            st.markdown(kpi_card("—", "Registros Entrenados", sub="—", color="orange"), unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    #  Gráficas principales 
+    if not df.empty and modelo is not None:
+        col_left, col_right = st.columns(2)
+
+        # PCA Scatter
+        with col_left:
+            st.markdown('<div class="panel-card"><h4> Proyección PCA 2D — Distribución de Perfiles</h4>', unsafe_allow_html=True)
+            session = get_session()
+            usuario_ids, X = obtener_matriz_entrenamiento(session)
             session.close()
+            proyeccion, varianza = proyeccion_pca_2d(X)
+            df_resultados = resultados_a_dataframe(modelo_id=registro.id)
+            df_plot = pd.DataFrame({
+                "usuario_id": usuario_ids,
+                "PCA_1": proyeccion[:, 0],
+                "PCA_2": proyeccion[:, 1],
+            }).merge(df_resultados[["usuario_id", "etiqueta_riasec"]], on="usuario_id", how="left")
+            fig_pca = px.scatter(
+                df_plot, x="PCA_1", y="PCA_2", color="etiqueta_riasec",
+                hover_data=["usuario_id"],
+                color_discrete_sequence=px.colors.qualitative.Set2,
+                labels={"PCA_1": "Componente 1", "PCA_2": "Componente 2", "etiqueta_riasec": "Perfil"},
+            )
+            fig_pca.update_traces(marker=dict(size=8, opacity=0.8, line=dict(width=0.5, color="white")))
+            fig_pca.update_layout(
+                height=360,
+                margin=dict(l=10, r=10, t=20, b=10),
+                paper_bgcolor="white",
+                plot_bgcolor="#F8FAFC",
+                legend=dict(font=dict(size=10), orientation="v", x=1.01, y=1),
+                font=dict(family="Inter", size=11),
+            )
+            st.plotly_chart(fig_pca, width='stretch')
+            st.caption(f"Varianza explicada: {round(sum(varianza)*100, 1)}%")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Radar de Centroides
+        with col_right:
+            st.markdown('<div class="panel-card"><h4> Radar de Clústeres — Perfil de Centroides</h4>', unsafe_allow_html=True)
+            from entrenamiento import etiquetar_clusters
+            centroides = modelo.means_
+            etiquetas = etiquetar_clusters(centroides)
+            fig_radar = go.Figure()
+            colores_radar = ["#3B82F6", "#22C55E", "#F59E0B", "#8B5CF6", "#EF4444", "#06B6D4"]
+            for idx, centro in enumerate(centroides):
+                color = colores_radar[idx % len(colores_radar)]
+                fig_radar.add_trace(go.Scatterpolar(
+                    r=list(centro) + [centro[0]],
+                    theta=DIMENSIONES + [DIMENSIONES[0]],
+                    fill="toself",
+                    name=f"C{idx}: {etiquetas[idx].replace('Predominantemente ', '')}",
+                    line=dict(color=color, width=2),
+                    fillcolor=color.replace("#", "rgba(").replace("F6", "F6,0.15)") if "F6" in color else color + "26",
+                ))
+            fig_radar.update_layout(
+                height=360,
+                polar=dict(
+                    radialaxis=dict(visible=True, range=[0, 6], tickfont=dict(size=9)),
+                    angularaxis=dict(tickfont=dict(size=11, family="Inter", color="#374151")),
+                    bgcolor="#F8FAFC",
+                ),
+                margin=dict(l=40, r=40, t=20, b=20),
+                paper_bgcolor="white",
+                legend=dict(font=dict(size=9), x=1.02, y=1),
+                font=dict(family="Inter"),
+            )
+            st.plotly_chart(fig_radar, width='stretch')
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    elif df.empty:
+        st.info(" No hay datos en la base de datos. Carga un CSV en la sección **Carga y Visualización** para comenzar.")
+    else:
+        st.info(" Hay datos disponibles. Ve a **Entrenamiento del Modelo** para generar el modelo de clustering.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    #  Fila inferior: distribuciones + últimos registros 
+    if not df.empty:
+        col_a, col_b, col_c = st.columns([1, 1, 2])
+
+        with col_a:
+            st.markdown('<div class="panel-card"><h4> Distribución por Sexo</h4>', unsafe_allow_html=True)
+            conteo_sexo, _ = distribucion_por_categoria(df.to_dict("records"), "sexo")
+            if conteo_sexo:
+                fig_pie = px.pie(
+                    values=list(conteo_sexo.values()),
+                    names=list(conteo_sexo.keys()),
+                    color_discrete_sequence=["#3B82F6", "#EC4899"],
+                    hole=0.45,
+                )
+                fig_pie.update_traces(textposition="outside", textinfo="percent+label",
+                                      textfont=dict(size=11, family="Inter"))
+                fig_pie.update_layout(
+                    height=240, margin=dict(l=0, r=0, t=10, b=0),
+                    paper_bgcolor="white", showlegend=False,
+                    font=dict(family="Inter"),
+                )
+                st.plotly_chart(fig_pie, width='stretch')
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_b:
+            st.markdown('<div class="panel-card"><h4> Top Carreras de Interés</h4>', unsafe_allow_html=True)
+            if "carrera_interes" in df.columns:
+                top_carreras = (
+                    df["carrera_interes"].dropna()
+                    .value_counts()
+                    .head(6)
+                    .reset_index()
+                )
+                top_carreras.columns = ["carrera", "count"]
+                if not top_carreras.empty:
+                    fig_bar = px.bar(
+                        top_carreras, x="count", y="carrera",
+                        orientation="h",
+                        color="count",
+                        color_continuous_scale=["#BFDBFE", "#2563EB"],
+                        labels={"count": "", "carrera": ""},
+                    )
+                    fig_bar.update_layout(
+                        height=240, margin=dict(l=0, r=10, t=10, b=0),
+                        paper_bgcolor="white", plot_bgcolor="white",
+                        coloraxis_showscale=False,
+                        yaxis=dict(tickfont=dict(size=9), autorange="reversed"),
+                        xaxis=dict(showgrid=False, showticklabels=False),
+                        font=dict(family="Inter"),
+                    )
+                    fig_bar.update_traces(marker_line_width=0)
+                    st.plotly_chart(fig_bar, width='stretch')
+                else:
+                    st.caption("Sin datos de carrera disponibles.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_c:
+            st.markdown('<div class="panel-card"><h4> Últimos Registros</h4>', unsafe_allow_html=True)
+            cols_mostrar = [c for c in ["usuario_id", "sexo", "edad", "carrera_interes", "fecha_registro"] if c in df.columns]
+            ultimos = df.sort_values("fecha_registro", ascending=False).head(8)[cols_mostrar]
+            if "fecha_registro" in ultimos.columns:
+                ultimos["fecha_registro"] = pd.to_datetime(ultimos["fecha_registro"]).dt.strftime("%Y-%m-%d")
+            st.dataframe(ultimos, width='stretch', hide_index=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
 
 # --------------------------------------------------------------------------
-# 2. CARGA Y VISUALIZACION
+# 1. CARGA Y VISUALIZACIÓN
 # --------------------------------------------------------------------------
-elif pestana == "2. Carga y visualización":
-    st.title("Carga de datos y visualización")
+elif pestana == "Carga y Visualización":
+    section_header("Carga de Datos y Visualización", "Importación · Filtros")
 
-    st.subheader("Subir dataset externo (CSV)")
-    st.caption("Columnas esperadas: sexo, edad, carrera_interes, R, I, A, S, E, C "
-               "(0-6 cada dimensión). El algoritmo no cambia, solo los datos de entrada.")
+    #  Subir CSV 
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown("####  Subir Dataset Externo (CSV)")
+    st.caption("Columnas esperadas: `sexo`, `edad`, `carrera_interes`, `R`, `I`, `A`, `S`, `E`, `C` (0-6 cada dimensión).")
     archivo = st.file_uploader("Selecciona un archivo CSV", type=["csv"])
 
     if archivo is not None:
         df_nuevo = pd.read_csv(archivo)
         columnas_esperadas = {"sexo", "edad", "R", "I", "A", "S", "E", "C"}
         if not columnas_esperadas.issubset(set(df_nuevo.columns)):
-            st.error(f"El archivo debe contener al menos las columnas: {columnas_esperadas}")
+            st.error(f" El archivo debe contener al menos las columnas: `{columnas_esperadas}`")
         else:
-            st.dataframe(df_nuevo.head())
-            if st.button("Confirmar e insertar en la base de datos"):
+            st.success(f" Archivo válido — {len(df_nuevo)} registros detectados.")
+            st.dataframe(df_nuevo.head(5), width='stretch', hide_index=True)
+            if st.button(" Confirmar e insertar en la base de datos"):
                 session = get_session()
                 try:
                     for _, fila in df_nuevo.iterrows():
@@ -164,26 +652,32 @@ elif pestana == "2. Carga y visualización":
                             a=int(fila["A"]), s=int(fila["S"]), e=int(fila["E"]), c=int(fila["C"]),
                         ))
                     session.commit()
-                    st.success(f"Se insertaron {len(df_nuevo)} registros nuevos.")
+                    st.success(f" Se insertaron **{len(df_nuevo)}** registros nuevos correctamente.")
                 finally:
                     session.close()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.subheader("Datos actuales en la base de datos")
+    #  Tabla y filtros 
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown("####  Explorador de Datos Actuales")
     df = usuarios_a_dataframe()
+
     if df.empty:
-        st.info("Aún no hay registros. Ejecuta seed.py o responde el cuestionario.")
+        st.info(" Aún no hay registros. Carga un CSV o ejecuta `seed.py` desde consola.")
     else:
         col1, col2, col3 = st.columns(3)
         with col1:
             filtro_sexo = st.multiselect("Filtrar por sexo", options=df["sexo"].dropna().unique().tolist())
         with col2:
-            rango_edad = st.slider("Rango de edad", int(df["edad"].min()), int(df["edad"].max()),
-                                    (int(df["edad"].min()), int(df["edad"].max())))
+            rango_edad = st.slider(
+                "Rango de edad",
+                int(df["edad"].min()), int(df["edad"].max()),
+                (int(df["edad"].min()), int(df["edad"].max()))
+            )
         with col3:
             fecha_min = df["fecha_registro"].min()
             fecha_max = df["fecha_registro"].max()
-            rango_fecha = st.date_input("Rango de fecha de registro",
-                                         (fecha_min.date(), fecha_max.date()))
+            rango_fecha = st.date_input("Rango de fecha de registro", (fecha_min.date(), fecha_max.date()))
 
         df_filtrado = df.copy()
         if filtro_sexo:
@@ -197,70 +691,197 @@ elif pestana == "2. Carga y visualización":
                 (df_filtrado["fecha_registro"].dt.date <= rango_fecha[1])
             ]
 
-        st.dataframe(df_filtrado, use_container_width=True)
+        st.markdown(f"<p style='color:#6B7280; font-size:0.85rem; margin-bottom:0.5rem;'>Mostrando <b>{len(df_filtrado)}</b> de <b>{len(df)}</b> registros</p>", unsafe_allow_html=True)
+        st.dataframe(df_filtrado, width='stretch', hide_index=True)
         st.session_state["df_filtrado"] = df_filtrado
 
+        # Mini distribución visual de vectores RIASEC filtrados
+        if all(c in df_filtrado.columns for c in ["R", "I", "A", "S", "E", "C"]):
+            st.markdown("---")
+            st.markdown("####  Distribución Media de Dimensiones RIASEC (datos filtrados)")
+            promedios = df_filtrado[["R", "I", "A", "S", "E", "C"]].mean().reset_index()
+            promedios.columns = ["Dimensión", "Promedio"]
+            promedios["Nombre"] = promedios["Dimensión"].map(NOMBRES_DIMENSION)
+            fig_dim = px.bar(
+                promedios, x="Dimensión", y="Promedio",
+                text="Promedio",
+                color="Promedio",
+                color_continuous_scale=["#BFDBFE", "#1D4ED8"],
+                labels={"Dimensión": "Dimensión RIASEC", "Promedio": "Media"},
+                custom_data=["Nombre"],
+            )
+            fig_dim.update_traces(
+                texttemplate="%{text:.2f}",
+                textposition="outside",
+                hovertemplate="<b>%{customdata[0]}</b><br>Media: %{y:.2f}<extra></extra>",
+                marker_line_width=0,
+            )
+            fig_dim.update_layout(
+                height=300, margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor="white", plot_bgcolor="white",
+                coloraxis_showscale=False,
+                yaxis=dict(range=[0, 7], showgrid=True, gridcolor="#F0F2F6"),
+                font=dict(family="Inter"),
+            )
+            st.plotly_chart(fig_dim, width='stretch')
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 # --------------------------------------------------------------------------
-# 3. ESTADISTICA DESCRIPTIVA
+# 2. ESTADÍSTICA DESCRIPTIVA
 # --------------------------------------------------------------------------
-elif pestana == "3. Estadística descriptiva":
-    st.title("Estadística descriptiva (algoritmos propios)")
+elif pestana == "Estadística Descriptiva":
+    section_header("Estadística Descriptiva", "Algoritmos Propios")
+
     df = usuarios_a_dataframe()
     if df.empty:
-        st.info("No hay datos suficientes.")
+        st.info(" No hay datos suficientes. Carga información primero.")
     else:
         vectores = df[["R", "I", "A", "S", "E", "C"]].rename(columns=str.lower).to_dict("records")
         resumen = resumen_dimensiones(vectores)
-        st.dataframe(pd.DataFrame(resumen).T, use_container_width=True)
 
-        st.subheader("Distribución por categoría")
-        campo = st.selectbox("Selecciona campo categórico", ["sexo", "carrera_interes"])
+        #  Tabla resumen 
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Resumen Estadístico por Dimensión RIASEC")
+        st.caption("Calculado con algoritmos propios: media, mediana, moda, desviación estándar, mínimo y máximo.")
+        df_resumen = pd.DataFrame(resumen).T
+        df_resumen.index.name = "Dimensión"
+        st.dataframe(df_resumen.style.format({"media": "{:.2f}", "mediana": "{:.2f}",
+                                               "desviacion_estandar": "{:.2f}"}),
+                     width='stretch')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        #  Gráficas de cajas / distribución 
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Dispersión por Dimensión (Box Plot)")
+        dim_cols = [c for c in ["R", "I", "A", "S", "E", "C"] if c in df.columns]
+        df_melt = df[dim_cols].melt(var_name="Dimensión", value_name="Puntuación")
+        df_melt["Nombre"] = df_melt["Dimensión"].map(NOMBRES_DIMENSION)
+        colores_box = {"R": "#3B82F6", "I": "#22C55E", "A": "#F59E0B", "S": "#EC4899", "E": "#8B5CF6", "C": "#06B6D4"}
+        fig_box = px.box(
+            df_melt, x="Dimensión", y="Puntuación",
+            color="Dimensión",
+            color_discrete_map=colores_box,
+            points="all",
+            hover_data=["Nombre"],
+            labels={"Puntuación": "Puntuación (0–6)", "Dimensión": "Dimensión RIASEC"},
+        )
+        fig_box.update_traces(marker=dict(size=4, opacity=0.5))
+        fig_box.update_layout(
+            height=360, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor="white", plot_bgcolor="#F8FAFC",
+            showlegend=False,
+            yaxis=dict(range=[-0.5, 6.5], showgrid=True, gridcolor="#E5E7EB"),
+            font=dict(family="Inter"),
+        )
+        st.plotly_chart(fig_box, width='stretch')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        #  Distribución por categoría 
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Distribución por Campo Categórico")
+        campo = st.selectbox("Selecciona campo", ["sexo", "carrera_interes"])
         conteo, porcentaje = distribucion_por_categoria(df.to_dict("records"), campo)
+
         col1, col2 = st.columns(2)
         with col1:
-            st.write("Conteo absoluto")
-            st.bar_chart(pd.Series(conteo))
+            df_conteo = pd.DataFrame({"Categoría": list(conteo.keys()), "Cantidad": list(conteo.values())})
+            df_conteo = df_conteo.sort_values("Cantidad", ascending=True)
+            fig_cat = px.bar(
+                df_conteo, x="Cantidad", y="Categoría", orientation="h",
+                color="Cantidad",
+                color_continuous_scale=["#BFDBFE", "#1D4ED8"],
+                labels={"Cantidad": "N° de usuarios", "Categoría": ""},
+            )
+            fig_cat.update_layout(
+                height=max(200, len(conteo) * 35 + 80),
+                margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor="white", plot_bgcolor="white",
+                coloraxis_showscale=False,
+                yaxis=dict(tickfont=dict(size=10)),
+                font=dict(family="Inter"),
+            )
+            fig_cat.update_traces(marker_line_width=0)
+            st.plotly_chart(fig_cat, width='stretch')
+
         with col2:
-            st.write("Porcentaje")
-            st.dataframe(pd.Series(porcentaje).rename("porcentaje (%)"))
+            df_pct = pd.DataFrame({
+                "Categoría": list(porcentaje.keys()),
+                "Porcentaje (%)": list(porcentaje.values())
+            }).sort_values("Porcentaje (%)", ascending=False)
+            st.dataframe(df_pct, width='stretch', hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 # --------------------------------------------------------------------------
-# 4. ENTRENAMIENTO
+# 3. ENTRENAMIENTO
 # --------------------------------------------------------------------------
-elif pestana == "4. Entrenamiento del modelo":
-    st.title("Entrenamiento del modelo (Gaussian Mixture Model)")
-    st.write("El modelo agrupa los vectores [R,I,A,S,E,C] de forma no supervisada "
-             "y despues etiqueta cada clúster según su centroide dominante.")
+elif pestana == "Entrenamiento del Modelo":
+    section_header("Entrenamiento del Modelo", "Gaussian Mixture Model")
+
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown("####  Configuración de Hiperparámetros")
+    st.caption("El modelo agrupa los vectores `[R,I,A,S,E,C]` de forma no supervisada y luego etiqueta cada clúster según su centroide dominante.")
 
     col1, col2 = st.columns(2)
     with col1:
-        n_componentes = st.number_input("Número de componentes (clústeres)", min_value=2, max_value=12, value=6)
+        n_componentes = st.number_input(
+            "Número de componentes (clústeres)",
+            min_value=2, max_value=12, value=6,
+            help="Cuántos grupos vocacionales distintos buscará el modelo."
+        )
     with col2:
-        covariance_type = st.selectbox("Tipo de covarianza", ["full", "tied", "diag", "spherical"])
+        covariance_type = st.selectbox(
+            "Tipo de covarianza",
+            ["full", "tied", "diag", "spherical"],
+            help="`full`: cada clúster tiene su propia matriz de covarianza completa (más flexible)."
+        )
 
-    if st.button("Entrenar modelo"):
-        with st.spinner("Entrenando..."):
+    col_btn, col_info = st.columns([1, 3])
+    with col_btn:
+        entrenar_btn = st.button(" Entrenar Modelo", width='stretch')
+    with col_info:
+        st.markdown("""
+        <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:0.6rem 1rem; font-size:0.82rem; color:#1E40AF;">
+            <b>ℹ Nota:</b> Al entrenar, el modelo anterior quedará inactivo. Se necesitan al menos <b>n_componentes</b> registros en la base de datos.
+        </div>
+        """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if entrenar_btn:
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        with st.spinner(" Entrenando el modelo Gaussian Mixture..."):
             try:
                 resultado = entrenar_modelo(n_componentes=n_componentes, covariance_type=covariance_type)
-                st.success(f"Modelo #{resultado['modelo_id']} entrenado con "
-                           f"{resultado['n_registros']} registros.")
-                st.json({
-                    "silhouette_score": resultado["silhouette"],
-                    "BIC": resultado["bic"],
-                    "AIC": resultado["aic"],
-                    "etiquetas_por_cluster": resultado["etiquetas"],
-                })
+
+                st.success(f" Modelo **#{resultado['modelo_id']}** entrenado exitosamente con **{resultado['n_registros']}** registros.")
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Silhouette Score", f"{resultado['silhouette']:.4f}" if resultado['silhouette'] else "N/A")
+                m2.metric("BIC", f"{resultado['bic']:.2f}")
+                m3.metric("AIC", f"{resultado['aic']:.2f}")
+
+                st.markdown("---")
+                st.markdown("####  Etiquetas Asignadas por Clúster")
+                etiquetas_df = pd.DataFrame([
+                    {"Clúster": f"Clúster {k}", "Etiqueta Vocacional": v}
+                    for k, v in resultado["etiquetas"].items()
+                ])
+                st.dataframe(etiquetas_df, width='stretch', hide_index=True)
             except ValueError as e:
-                st.error(str(e))
+                st.error(f" {str(e)}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 # --------------------------------------------------------------------------
-# 5. RESULTADOS
+# 4. RESULTADOS
 # --------------------------------------------------------------------------
-elif pestana == "5. Resultados":
-    st.title("Resultados del clustering")
+elif pestana == "Resultados":
+    section_header("Resultados del Clustering", "PCA · Asignaciones")
+
     modelo, registro = cargar_modelo_activo()
     if modelo is None:
-        st.info("Aún no hay ningún modelo entrenado.")
+        st.info(" Aún no hay ningún modelo entrenado. Ve a **Entrenamiento del Modelo** para generar uno.")
     else:
         session = get_session()
         usuario_ids, X = obtener_matriz_entrenamiento(session)
@@ -274,88 +895,266 @@ elif pestana == "5. Resultados":
             "PCA_2": proyeccion[:, 1],
         }).merge(df_resultados[["usuario_id", "etiqueta_riasec"]], on="usuario_id", how="left")
 
-        st.caption(f"Varianza explicada por las 2 componentes: "
-                   f"{round(sum(varianza) * 100, 1)}%")
-        fig = px.scatter(df_plot, x="PCA_1", y="PCA_2", color="etiqueta_riasec",
-                          hover_data=["usuario_id"], title="Clústeres proyectados (PCA 6D → 2D)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(df_resultados, use_container_width=True)
+        # KPIs rápidos
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Total usuarios asignados", len(df_resultados))
+        r2.metric("Clústeres identificados", df_resultados["cluster_id"].nunique() if not df_resultados.empty else "—")
+        r3.metric("Varianza PCA explicada", f"{round(sum(varianza)*100, 1)}%")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Scatter PCA
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Clústeres Proyectados (PCA 6D → 2D)")
+        fig = px.scatter(
+            df_plot, x="PCA_1", y="PCA_2", color="etiqueta_riasec",
+            hover_data=["usuario_id"],
+            color_discrete_sequence=px.colors.qualitative.Set2,
+            labels={"PCA_1": "Componente Principal 1", "PCA_2": "Componente Principal 2", "etiqueta_riasec": "Perfil Vocacional"},
+        )
+        fig.update_traces(marker=dict(size=9, opacity=0.82, line=dict(width=0.5, color="white")))
+        fig.update_layout(
+            height=450,
+            paper_bgcolor="white", plot_bgcolor="#F8FAFC",
+            margin=dict(l=10, r=10, t=10, b=10),
+            legend=dict(font=dict(size=10, family="Inter"), orientation="v", x=1.01, y=1,
+                        bgcolor="rgba(255,255,255,0.8)", bordercolor="#E5E7EB", borderwidth=1),
+            font=dict(family="Inter"),
+        )
+        st.plotly_chart(fig, width='stretch')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Tabla de asignaciones
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Tabla de Asignaciones por Usuario")
+        df_tabla = df_resultados[["usuario_id", "cluster_id", "etiqueta_riasec"]].copy()
+        st.dataframe(df_tabla, width='stretch', hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 # --------------------------------------------------------------------------
-# 6. COMPARATIVA DE CLUSTERES
+# 5. COMPARATIVA DE CLÚSTERES
 # --------------------------------------------------------------------------
-elif pestana == "6. Comparativa de clústeres":
-    st.title("Comparativa entre clústeres (perfil radar)")
+elif pestana == "Comparativa de Clústeres":
+    section_header("Comparativa entre Clústeres", "Perfil Radar")
+
     modelo, registro = cargar_modelo_activo()
     if modelo is None:
-        st.info("Aún no hay ningún modelo entrenado.")
+        st.info(" Aún no hay ningún modelo entrenado.")
     else:
-        etiquetas = etiquetar_clusters_local = None
-        centroides = modelo.means_
         from entrenamiento import etiquetar_clusters
+        centroides = modelo.means_
         etiquetas = etiquetar_clusters(centroides)
+
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Gráfico Radar — Medias por Dimensión por Clúster")
+
+        colores_radar = ["#3B82F6", "#22C55E", "#F59E0B", "#8B5CF6", "#EF4444", "#06B6D4",
+                         "#EC4899", "#84CC16", "#F97316", "#14B8A6", "#6366F1", "#A78BFA"]
 
         fig = go.Figure()
         for idx, centro in enumerate(centroides):
+            color = colores_radar[idx % len(colores_radar)]
             fig.add_trace(go.Scatterpolar(
                 r=list(centro) + [centro[0]],
                 theta=DIMENSIONES + [DIMENSIONES[0]],
                 fill="toself",
-                name=f"Clúster {idx}: {etiquetas[idx]}",
+                name=f"C{idx}: {etiquetas[idx].replace('Predominantemente ', '')}",
+                line=dict(color=color, width=2.5),
+                fillcolor=color + "22",
+                opacity=0.9,
             ))
-        fig.update_layout(title="Medias por dimensión (R,I,A,S,E,C) por clúster")
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(
+            height=520,
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 6], tickfont=dict(size=10, family="Inter"),
+                                gridcolor="#E5E7EB", linecolor="#D1D5DB"),
+                angularaxis=dict(tickfont=dict(size=13, family="Inter", color="#374151"),
+                                 linecolor="#D1D5DB"),
+                bgcolor="#F8FAFC",
+            ),
+            paper_bgcolor="white",
+            margin=dict(l=60, r=60, t=30, b=30),
+            legend=dict(font=dict(size=10, family="Inter"), bgcolor="rgba(255,255,255,0.9)",
+                        bordercolor="#E5E7EB", borderwidth=1),
+            font=dict(family="Inter"),
+        )
+        st.plotly_chart(fig, width='stretch')
+        st.markdown('</div>', unsafe_allow_html=True)
 
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Tabla de Centroides por Clúster")
         tabla_centroides = pd.DataFrame(centroides, columns=DIMENSIONES)
-        tabla_centroides.insert(0, "etiqueta", [etiquetas[i] for i in range(len(centroides))])
-        st.dataframe(tabla_centroides, use_container_width=True)
+        tabla_centroides.insert(0, "Clúster", [f"C{i}" for i in range(len(centroides))])
+        tabla_centroides.insert(1, "Perfil Vocacional", [etiquetas[i] for i in range(len(centroides))])
+        for col in DIMENSIONES:
+            tabla_centroides[col] = tabla_centroides[col].round(3)
+        st.dataframe(tabla_centroides, width='stretch', hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
 # --------------------------------------------------------------------------
-# 7. METADATOS DEL MODELO
+# 6. METADATOS DEL MODELO
 # --------------------------------------------------------------------------
-elif pestana == "7. Metadatos del modelo":
-    st.title("Ficha de metadatos del algoritmo")
+elif pestana == "Metadatos del Modelo":
+    section_header("Historial de Modelos Entrenados", "Metadatos · Métricas")
+
     session = get_session()
     registros = session.query(ModeloEntrenado).order_by(ModeloEntrenado.fecha_entrenamiento.desc()).all()
     session.close()
+
     if not registros:
-        st.info("Aún no hay modelos entrenados.")
+        st.info(" Aún no hay modelos entrenados. Ve a **Entrenamiento del Modelo** para generar uno.")
     else:
+        # Modelo activo card
+        activo = next((r for r in registros if r.activo), None)
+        if activo:
+            st.markdown(f"""
+            <div class="panel-card" style="border-left: 4px solid #22C55E;">
+                <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem;">
+                    <span class="badge-active"> MODELO ACTIVO</span>
+                    <span style="font-size:0.85rem; color:#374151; font-weight:600;">Modelo #{activo.id} — {activo.algoritmo}</span>
+                </div>
+                <div style="display:grid; grid-template-columns: repeat(4,1fr); gap:1rem; margin-top:0.75rem;">
+                    <div><div style="font-size:0.7rem;color:#6B7280;text-transform:uppercase;">Componentes</div><div style="font-size:1.3rem;font-weight:700;color:#1B2A4A;">{activo.n_componentes}</div></div>
+                    <div><div style="font-size:0.7rem;color:#6B7280;text-transform:uppercase;">Covarianza</div><div style="font-size:1.3rem;font-weight:700;color:#1B2A4A;">{activo.covariance_type}</div></div>
+                    <div><div style="font-size:0.7rem;color:#6B7280;text-transform:uppercase;">Silhouette</div><div style="font-size:1.3rem;font-weight:700;color:#22C55E;">{round(activo.silhouette_score,4) if activo.silhouette_score else "N/A"}</div></div>
+                    <div><div style="font-size:0.7rem;color:#6B7280;text-transform:uppercase;">Registros</div><div style="font-size:1.3rem;font-weight:700;color:#1B2A4A;">{activo.n_registros_entrenamiento}</div></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Tabla histórica
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Historial Completo de Entrenamientos")
         tabla = pd.DataFrame([{
-            "id": r.id, "algoritmo": r.algoritmo, "n_componentes": r.n_componentes,
-            "covariance_type": r.covariance_type, "n_registros": r.n_registros_entrenamiento,
-            "silhouette": r.silhouette_score, "BIC": r.bic, "AIC": r.aic,
-            "fecha": r.fecha_entrenamiento, "activo": bool(r.activo),
+            "ID": r.id,
+            "Algoritmo": r.algoritmo,
+            "Componentes": r.n_componentes,
+            "Covarianza": r.covariance_type,
+            "Registros": r.n_registros_entrenamiento,
+            "Silhouette": round(r.silhouette_score, 4) if r.silhouette_score else None,
+            "BIC": round(r.bic, 2) if r.bic else None,
+            "AIC": round(r.aic, 2) if r.aic else None,
+            "Fecha": r.fecha_entrenamiento.strftime("%Y-%m-%d %H:%M") if r.fecha_entrenamiento else None,
+            "Activo": " Activo" if r.activo else " Inactivo",
         } for r in registros])
-        st.dataframe(tabla, use_container_width=True)
+        st.dataframe(tabla, width='stretch', hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Gráfica comparativa de métricas
+        if len(registros) > 1:
+            st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+            st.markdown("####  Comparativa de Métricas entre Modelos")
+            df_metricas = pd.DataFrame([{
+                "Modelo": f"#{r.id}",
+                "Silhouette": r.silhouette_score,
+                "BIC": r.bic,
+                "AIC": r.aic,
+            } for r in registros if r.silhouette_score is not None])
+            if not df_metricas.empty:
+                tab1, tab2 = st.tabs(["Silhouette Score", "BIC / AIC"])
+                with tab1:
+                    fig_sil = px.bar(df_metricas, x="Modelo", y="Silhouette",
+                                     color="Silhouette", color_continuous_scale=["#BFDBFE", "#1D4ED8"],
+                                     labels={"Silhouette": "Silhouette Score"})
+                    fig_sil.update_layout(height=280, paper_bgcolor="white", plot_bgcolor="white",
+                                          coloraxis_showscale=False, font=dict(family="Inter"),
+                                          margin=dict(l=10, r=10, t=10, b=10))
+                    st.plotly_chart(fig_sil, width='stretch')
+                with tab2:
+                    fig_bic = px.line(df_metricas, x="Modelo", y=["BIC", "AIC"],
+                                      markers=True, labels={"value": "Score", "variable": "Métrica"},
+                                      color_discrete_map={"BIC": "#3B82F6", "AIC": "#22C55E"})
+                    fig_bic.update_layout(height=280, paper_bgcolor="white", plot_bgcolor="#F8FAFC",
+                                          font=dict(family="Inter"), margin=dict(l=10, r=10, t=10, b=10))
+                    st.plotly_chart(fig_bic, width='stretch')
+            st.markdown('</div>', unsafe_allow_html=True)
+
 
 # --------------------------------------------------------------------------
-# 8. DESCARGAS
+# 7. DESCARGAS
 # --------------------------------------------------------------------------
-elif pestana == "8. Descargas":
-    st.title("Descargas")
+elif pestana == "Descargas":
+    section_header("Descargas", "Exportación de Datos")
 
-    st.subheader("Datos cuantitativos (filtrados)")
+    #  CSV Datos filtrados 
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown("####  Dataset de Usuarios (CSV)")
+    st.caption("Se exportan los datos tal como están filtrados en la sección **Carga y Visualización**. Si no usaste filtros, se incluyen todos los registros.")
     df_filtrado = st.session_state.get("df_filtrado", usuarios_a_dataframe())
+    st.markdown(f"<p style='color:#6B7280; font-size:0.85rem;'><b>{len(df_filtrado)}</b> registros disponibles para exportar.</p>", unsafe_allow_html=True)
     csv_buffer = io.StringIO()
     df_filtrado.to_csv(csv_buffer, index=False)
-    st.download_button("Descargar CSV de datos filtrados", data=csv_buffer.getvalue(),
-                        file_name="riasec_datos_filtrados.csv", mime="text/csv")
+    st.download_button(
+        " Descargar CSV de datos filtrados",
+        data=csv_buffer.getvalue(),
+        file_name="riasec_datos_filtrados.csv",
+        mime="text/csv",
+        width='content',
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.subheader("Reporte cualitativo (interpretación)")
+    #  Reporte cualitativo 
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown("####  Reporte Cualitativo de Interpretación (.txt)")
     modelo, registro = cargar_modelo_activo()
     if modelo is not None:
         from entrenamiento import etiquetar_clusters
         etiquetas = etiquetar_clusters(modelo.means_)
-        lineas = ["REPORTE CUALITATIVO - PERFIL VOCACIONAL RIASEC", "=" * 50, ""]
+        lineas = [
+            "=" * 60,
+            " REPORTE CUALITATIVO — PERFIL VOCACIONAL RIASEC",
+            f" Modelo #{registro.id} | {registro.algoritmo} | {registro.n_componentes} componentes",
+            f" Fecha de entrenamiento: {registro.fecha_entrenamiento}",
+            f" Silhouette Score: {round(registro.silhouette_score, 4) if registro.silhouette_score else 'N/A'}",
+            "=" * 60,
+            "",
+        ]
         for idx, etiqueta in etiquetas.items():
             centro = modelo.means_[idx]
             lineas.append(f"Clúster {idx}: {etiqueta}")
-            lineas.append(f"  Perfil promedio (R,I,A,S,E,C): {[round(v, 2) for v in centro]}")
+            lineas.append(f"Perfil promedio [R, I, A, S, E, C]: {[round(v, 3) for v in centro]}")
+            dom = sorted(zip(DIMENSIONES, centro), key=lambda x: x[1], reverse=True)
+            lineas.append(f"Dimensión dominante: {NOMBRES_DIMENSION[dom[0][0].upper()]} ({dom[0][1]:.2f})")
             lineas.append("")
+
         texto_reporte = "\n".join(lineas)
-        st.text_area("Vista previa", texto_reporte, height=250)
-        st.download_button("Descargar reporte cualitativo (.txt)", data=texto_reporte,
-                            file_name="riasec_reporte_cualitativo.txt", mime="text/plain")
+        st.text_area("Vista previa del reporte", texto_reporte, height=300)
+        st.download_button(
+            " Descargar reporte cualitativo (.txt)",
+            data=texto_reporte,
+            file_name="riasec_reporte_cualitativo.txt",
+            mime="text/plain",
+        )
     else:
-        st.info("Entrena un modelo primero para generar el reporte cualitativo.")
+        st.info(" Entrena un modelo primero para generar el reporte cualitativo.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    #  Resumen JSON del modelo activo 
+    if modelo is not None:
+        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+        st.markdown("####  Metadatos del Modelo Activo (JSON)")
+        from entrenamiento import etiquetar_clusters
+        etiquetas = etiquetar_clusters(modelo.means_)
+        meta_json = {
+            "modelo_id": registro.id,
+            "algoritmo": registro.algoritmo,
+            "n_componentes": registro.n_componentes,
+            "covariance_type": registro.covariance_type,
+            "silhouette_score": registro.silhouette_score,
+            "bic": registro.bic,
+            "aic": registro.aic,
+            "n_registros_entrenamiento": registro.n_registros_entrenamiento,
+            "fecha_entrenamiento": str(registro.fecha_entrenamiento),
+            "etiquetas_cluster": etiquetas,
+            "centroides": {f"cluster_{k}": dict(zip(DIMENSIONES, v.tolist())) for k, v in enumerate(modelo.means_)},
+        }
+        json_str = json.dumps(meta_json, indent=2, ensure_ascii=False)
+        st.download_button(
+            " Descargar metadatos JSON",
+            data=json_str,
+            file_name="riasec_modelo_metadatos.json",
+            mime="application/json",
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
