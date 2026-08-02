@@ -12,6 +12,7 @@ Ejecutar con: streamlit run app.py
 import json
 import io
 import datetime
+import unicodedata
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -425,6 +426,105 @@ st.sidebar.markdown("""
 
 
 # --------------------------------------------------------------------------
+# Utilidad: Parsear CSV exportado de Google Forms
+# --------------------------------------------------------------------------
+def es_csv_google_forms(df_raw: pd.DataFrame) -> bool:
+    """Detecta si el DataFrame proviene de un formulario de Google."""
+    primera = str(df_raw.columns[0]).strip().lower()
+    return "marca temporal" in primera or "timestamp" in primera
+
+
+def _score_respuesta(respuesta: str) -> int:
+    """
+    Convierte una respuesta cualitativa a puntaje 0/3/6.
+    Respuestas positivas -> 6, neutrales -> 3, negativas -> 0.
+    """
+    if pd.isna(respuesta):
+        return 3  # valor neutral por defecto
+
+    def _norm(s):
+        """Normaliza acentos y convierte a minusculas para comparacion robusta."""
+        return ''.join(
+            c for c in unicodedata.normalize('NFD', str(s).strip().lower())
+            if unicodedata.category(c) != 'Mn'
+        )
+
+    r = _norm(respuesta)
+
+    # Palabras clave de alta afinidad -> 6
+    alto = [
+        "si, lo prefiero", "si, me identifica mucho", "me interesa mucho",
+        "siempre", "mucho", "si, frecuentemente", "si, es una de mis formas favoritas",
+        "casi siempre", "siempre que puedo", "si, con facilidad", "si, definitivamente",
+        "si, disfruto liderar", "si, sin problema", "si, siempre",
+        "si, me siento mas comodo(a)", "si, de manera constante",
+    ]
+    # Palabras clave neutras -> 3
+    medio = [
+        "a veces me identifica", "depende de la situacion", "me interesa un poco",
+        "algunas veces", "de vez en cuando", "en algunas ocasiones",
+        "solo cuando el tema me interesa", "prefiero soluciones tradicionales",
+        "solo en algunas ocasiones", "depende de la persona", "depende de la actividad",
+        "solo cuando es necesario", "solo si el riesgo es razonable", "tal vez",
+        "prefiero tener libertad para decidir",
+    ]
+
+    if r in alto:
+        return 6
+    if r in medio:
+        return 3
+    # Cualquier otra respuesta negativa -> 0
+    return 0
+
+
+# Mapeo de dimensiones RIASEC -> indice de columna en el CSV de Google Forms
+# col[0]=Marca temporal, col[1]=Sexo, col[2-4]=R, col[5-7]=I,
+# col[8-10]=A, col[11-13]=S, col[14-16]=E, col[17-19]=C
+_GF_DIMENSION_COLS = {
+    "R": [2, 3, 4],
+    "I": [5, 6, 7],
+    "A": [8, 9, 10],
+    "S": [11, 12, 13],
+    "E": [14, 15, 16],
+    "C": [17, 18, 19],
+}
+
+
+def parsear_csv_google_forms(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """
+    Transforma el CSV de Google Forms al formato estandar:
+    sexo, edad, carrera_interes, R, I, A, S, E, C.
+    """
+    registros = []
+    for _, fila in df_raw.iterrows():
+        # Sexo
+        sexo_raw = str(fila.iloc[1]).strip() if len(fila) > 1 else ""
+        sexo = "M" if "hombre" in sexo_raw.lower() else "F" if "mujer" in sexo_raw.lower() else sexo_raw
+
+        # Calcular puntaje por dimension (promedio de 3 preguntas, rango 0-6)
+        scores = {}
+        for dim, cols in _GF_DIMENSION_COLS.items():
+            puntos = []
+            for col_idx in cols:
+                if col_idx < len(fila):
+                    puntos.append(_score_respuesta(fila.iloc[col_idx]))
+            scores[dim] = round(sum(puntos) / len(puntos)) if puntos else 0
+
+        registros.append({
+            "sexo": sexo,
+            "edad": None,
+            "carrera_interes": None,
+            "R": scores["R"],
+            "I": scores["I"],
+            "A": scores["A"],
+            "S": scores["S"],
+            "E": scores["E"],
+            "C": scores["C"],
+        })
+    return pd.DataFrame(registros)
+
+
+# --------------------------------------------------------------------------
 # 0. DASHBOARD
 # --------------------------------------------------------------------------
 if pestana == "Dashboard":
@@ -616,6 +716,7 @@ if pestana == "Dashboard":
             st.markdown('</div>', unsafe_allow_html=True)
 
 
+
 # --------------------------------------------------------------------------
 # 1. CARGA Y VISUALIZACIÓN
 # --------------------------------------------------------------------------
@@ -625,34 +726,77 @@ elif pestana == "Carga y Visualización":
     #  Subir CSV 
     st.markdown('<div class="panel-card">', unsafe_allow_html=True)
     st.markdown("####  Subir Dataset Externo (CSV)")
-    st.caption("Columnas esperadas: `sexo`, `edad`, `carrera_interes`, `R`, `I`, `A`, `S`, `E`, `C` (0-6 cada dimensión).")
+    st.caption(
+        "Formatos soportados: **CSV estándar** con columnas `sexo`, `edad`, `R`, `I`, `A`, `S`, `E`, `C` "
+        "— o directamente el **CSV exportado de Google Forms** (se convierte automáticamente)."
+    )
     archivo = st.file_uploader("Selecciona un archivo CSV", type=["csv"])
 
     if archivo is not None:
-        df_nuevo = pd.read_csv(archivo)
-        columnas_esperadas = {"sexo", "edad", "R", "I", "A", "S", "E", "C"}
-        if not columnas_esperadas.issubset(set(df_nuevo.columns)):
-            st.error(f" El archivo debe contener al menos las columnas: `{columnas_esperadas}`")
+        df_raw = pd.read_csv(archivo)
+        columnas_estandar = {"sexo", "R", "I", "A", "S", "E", "C"}
+        es_forms = es_csv_google_forms(df_raw)
+
+        if es_forms:
+            # ── Formato Google Forms ──────────────────────────────────────
+            st.info(
+                "📋 **Formato Google Forms detectado** — Las respuestas de texto se convierten "
+                "automáticamente a puntajes RIASEC (0–6). "
+                "`edad` y `carrera_interes` no están disponibles en este formulario."
+            )
+            df_nuevo = parsear_csv_google_forms(df_raw)
+            st.success(f"✅ {len(df_nuevo)} registros convertidos correctamente.")
+            with st.expander("👁 Vista previa de los datos convertidos (primeros 5)", expanded=True):
+                st.dataframe(df_nuevo.head(5), use_container_width=True, hide_index=True)
+
+        elif columnas_estandar.issubset(set(df_raw.columns)):
+            # ── Formato estándar ──────────────────────────────────────────
+            df_nuevo = df_raw
+            st.success(f"✅ Archivo válido — {len(df_nuevo)} registros detectados.")
+            with st.expander("👁 Vista previa (primeros 5)", expanded=True):
+                st.dataframe(df_nuevo.head(5), use_container_width=True, hide_index=True)
+
         else:
-            st.success(f" Archivo válido — {len(df_nuevo)} registros detectados.")
-            st.dataframe(df_nuevo.head(5), width='stretch', hide_index=True)
-            if st.button(" Confirmar e insertar en la base de datos"):
+            # ── Error: formato desconocido ────────────────────────────────
+            st.error(
+                "❌ Formato de archivo no reconocido.\n\n"
+                "**Opciones válidas:**\n"
+                "- CSV estándar con columnas: `sexo`, `edad`, `R`, `I`, `A`, `S`, `E`, `C`\n"
+                "- CSV exportado directamente de Google Forms (detección automática)"
+            )
+            with st.expander("🔍 Columnas encontradas en el archivo"):
+                st.write(list(df_raw.columns))
+            df_nuevo = None
+
+        if 'df_nuevo' in dir() and df_nuevo is not None:
+            if st.button("💾 Confirmar e insertar en la base de datos", type="primary"):
                 session = get_session()
                 try:
+                    insertados = 0
                     for _, fila in df_nuevo.iterrows():
+                        edad_val = fila.get("edad")
+                        edad_int = int(edad_val) if pd.notna(edad_val) and edad_val is not None else None
                         usuario = Usuario(
-                            sexo=fila.get("sexo"), edad=fila.get("edad"),
+                            sexo=fila.get("sexo"),
+                            edad=edad_int,
                             carrera_interes=fila.get("carrera_interes"),
                             fecha_registro=datetime.datetime.utcnow(),
                         )
                         session.add(usuario)
                         session.flush()
                         session.add(VectorRiasec(
-                            usuario_id=usuario.id, r=int(fila["R"]), i=int(fila["I"]),
-                            a=int(fila["A"]), s=int(fila["S"]), e=int(fila["E"]), c=int(fila["C"]),
+                            usuario_id=usuario.id,
+                            r=int(fila["R"]), i=int(fila["I"]),
+                            a=int(fila["A"]), s=int(fila["S"]),
+                            e=int(fila["E"]), c=int(fila["C"]),
                         ))
+                        insertados += 1
                     session.commit()
-                    st.success(f" Se insertaron **{len(df_nuevo)}** registros nuevos correctamente.")
+                    st.success(f"✅ Se insertaron **{insertados}** registros nuevos correctamente.")
+                    st.balloons()
+                except Exception as ex:
+                    session.rollback()
+                    st.error(f"❌ Error al insertar: {ex}")
                 finally:
                     session.close()
     st.markdown('</div>', unsafe_allow_html=True)
@@ -668,12 +812,20 @@ elif pestana == "Carga y Visualización":
         col1, col2, col3 = st.columns(3)
         with col1:
             filtro_sexo = st.multiselect("Filtrar por sexo", options=df["sexo"].dropna().unique().tolist())
+
+        # Slider de edad solo si hay registros con edad definida
+        edad_valida = df["edad"].dropna()
         with col2:
-            rango_edad = st.slider(
-                "Rango de edad",
-                int(df["edad"].min()), int(df["edad"].max()),
-                (int(df["edad"].min()), int(df["edad"].max()))
-            )
+            if not edad_valida.empty:
+                rango_edad = st.slider(
+                    "Rango de edad",
+                    int(edad_valida.min()), int(edad_valida.max()),
+                    (int(edad_valida.min()), int(edad_valida.max()))
+                )
+            else:
+                rango_edad = None
+                st.caption("⚠️ Sin datos de edad disponibles")
+
         with col3:
             fecha_min = df["fecha_registro"].min()
             fecha_max = df["fecha_registro"].max()
@@ -682,9 +834,15 @@ elif pestana == "Carga y Visualización":
         df_filtrado = df.copy()
         if filtro_sexo:
             df_filtrado = df_filtrado[df_filtrado["sexo"].isin(filtro_sexo)]
-        df_filtrado = df_filtrado[
-            (df_filtrado["edad"] >= rango_edad[0]) & (df_filtrado["edad"] <= rango_edad[1])
-        ]
+
+        # Filtro de edad: incluir siempre registros sin edad (NaN)
+        if rango_edad is not None:
+            mascara_edad = (
+                df_filtrado["edad"].isna() |
+                ((df_filtrado["edad"] >= rango_edad[0]) & (df_filtrado["edad"] <= rango_edad[1]))
+            )
+            df_filtrado = df_filtrado[mascara_edad]
+
         if isinstance(rango_fecha, tuple) and len(rango_fecha) == 2:
             df_filtrado = df_filtrado[
                 (df_filtrado["fecha_registro"].dt.date >= rango_fecha[0]) &
