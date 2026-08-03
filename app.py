@@ -25,6 +25,11 @@ from db import (
 from cuestionario import PREGUNTAS, DIMENSIONES, NOMBRES_DIMENSION, agregar_vector
 from estadistica import media, desviacion_estandar, moda, mediana, distribucion_por_categoria, resumen_dimensiones
 from entrenamiento import entrenar_modelo, cargar_modelo_activo, obtener_matriz_entrenamiento, proyeccion_pca_2d
+# PDF generation imports
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
 
 # --------------------------------------------------------------------------
 # Configuración de página
@@ -1249,6 +1254,35 @@ elif pestana == "Descargas":
         data=csv_buffer.getvalue(),
         file_name="riasec_datos_filtrados.csv",
         mime="text/csv",
+        width='content',
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # PDF Datos filtrados
+    st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+    st.markdown("####  Dataset de Usuarios (PDF)")
+    st.caption("Exporta los datos filtrados a PDF. Se incluye una tabla con los registros.")
+    pdf_buffer = io.BytesIO()
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+    elements = []
+    styles = getSampleStyleSheet()
+    title = Paragraph("Dataset de Usuarios", styles["Title"])
+    elements.append(title)
+    data = [df_filtrado.columns.tolist()] + df_filtrado.values.tolist()
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold')
+    ]))
+    elements.append(table)
+    doc.build(elements)
+    pdf_buffer.seek(0)
+    st.download_button(
+        " Descargar PDF de datos filtrados",
+        data=pdf_buffer,
+        file_name="riasec_datos_filtrados.pdf",
+        mime="application/pdf",
         width='content',
     )
     st.markdown('</div>', unsafe_allow_html=True)
