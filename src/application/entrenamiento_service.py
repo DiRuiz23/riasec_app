@@ -11,6 +11,7 @@ import joblib
 import numpy as np
 from datetime import datetime
 from sklearn.mixture import GaussianMixture
+from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 
@@ -52,9 +53,9 @@ def etiquetar_clusters(centroides):
     return etiquetas
 
 
-def entrenar_modelo(n_componentes=6, covariance_type="full", desactivar_anteriores=True):
+def entrenar_modelo(n_componentes=6, covariance_type="full", desactivar_anteriores=True, algoritmo="GaussianMixture"):
     """
-    Entrena un GMM, guarda el .pkl, calcula metricas (silhouette, BIC, AIC),
+    Entrena un modelo (GMM o KMeans), guarda el .pkl, calcula metricas (silhouette, BIC, AIC),
     guarda el registro en modelos_entrenados y asigna resultados por usuario.
     """
     session = get_session()
@@ -66,16 +67,37 @@ def entrenar_modelo(n_componentes=6, covariance_type="full", desactivar_anterior
                 f"con {n_componentes} componentes (hay {len(X)})."
             )
 
-        modelo = GaussianMixture(
-            n_components=n_componentes,
-            covariance_type=covariance_type,
-            random_state=42,
-            n_init=10,
-        )
-        modelo.fit(X)
+        if algoritmo == "KMeans":
+            modelo = KMeans(
+                n_clusters=n_componentes,
+                random_state=42,
+                n_init=10,
+            )
+            modelo.fit(X)
+            etiquetas_cluster = modelo.predict(X)
+            # Simular predict_proba para KMeans (one-hot encoding) para no romper UI
+            probabilidades = np.zeros((len(X), n_componentes))
+            for i, c in enumerate(etiquetas_cluster):
+                probabilidades[i, c] = 1.0
+            
+            # KMeans no tiene BIC ni AIC
+            bic, aic = None, None
+            # KMeans usa cluster_centers_ en lugar de means_, lo igualamos para compatibilidad
+            modelo.means_ = modelo.cluster_centers_
+            covariance_type = "N/A"
 
-        etiquetas_cluster = modelo.predict(X)
-        probabilidades = modelo.predict_proba(X)
+        else: # GaussianMixture
+            modelo = GaussianMixture(
+                n_components=n_componentes,
+                covariance_type=covariance_type,
+                random_state=42,
+                n_init=10,
+            )
+            modelo.fit(X)
+            etiquetas_cluster = modelo.predict(X)
+            probabilidades = modelo.predict_proba(X)
+            bic = float(modelo.bic(X))
+            aic = float(modelo.aic(X))
 
         # Silhouette requiere al menos 2 clusters distintos presentes
         try:
@@ -83,13 +105,10 @@ def entrenar_modelo(n_componentes=6, covariance_type="full", desactivar_anterior
         except ValueError:
             score_silueta = None
 
-        bic = float(modelo.bic(X))
-        aic = float(modelo.aic(X))
-
         etiquetas_texto = etiquetar_clusters(modelo.means_)
 
         fecha = datetime.utcnow()
-        nombre_archivo = f"gmm_riasec_{fecha.strftime('%Y%m%d_%H%M%S')}.pkl"
+        nombre_archivo = f"{algoritmo.lower()}_riasec_{fecha.strftime('%Y%m%d_%H%M%S')}.pkl"
         ruta = os.path.join(CARPETA_MODELOS, nombre_archivo)
         joblib.dump(modelo, ruta)
 
@@ -98,7 +117,7 @@ def entrenar_modelo(n_componentes=6, covariance_type="full", desactivar_anterior
 
         registro_modelo = ModeloEntrenado(
             fecha_entrenamiento=fecha,
-            algoritmo="GaussianMixture",
+            algoritmo=algoritmo,
             n_componentes=n_componentes,
             covariance_type=covariance_type,
             n_registros_entrenamiento=len(X),
@@ -154,3 +173,27 @@ def proyeccion_pca_2d(X):
     """Reduce el vector de 6 dimensiones a 2 componentes principales para graficar."""
     pca = PCA(n_components=2, random_state=42)
     return pca.fit_transform(X), pca.explained_variance_ratio_
+
+
+def obtener_historial_modelos():
+    """Retorna una lista de todos los modelos entrenados ordenados por fecha."""
+    session = get_session()
+    try:
+        return session.query(ModeloEntrenado).order_by(ModeloEntrenado.fecha_entrenamiento.desc()).all()
+    finally:
+        session.close()
+
+
+def activar_modelo_historico(modelo_id):
+    """Desactiva todos los modelos y activa el especificado por modelo_id."""
+    session = get_session()
+    try:
+        session.query(ModeloEntrenado).update({ModeloEntrenado.activo: 0})
+        modelo = session.query(ModeloEntrenado).filter_by(id=modelo_id).first()
+        if modelo:
+            modelo.activo = 1
+            session.commit()
+            return True
+        return False
+    finally:
+        session.close()

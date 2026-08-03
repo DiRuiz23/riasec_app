@@ -24,7 +24,7 @@ from src.infrastructure.database.db import (
 )
 from src.application.cuestionario_service import PREGUNTAS, DIMENSIONES, NOMBRES_DIMENSION, agregar_vector
 from src.application.estadistica_service import media, desviacion_estandar, moda, mediana, distribucion_por_categoria, resumen_dimensiones
-from src.application.entrenamiento_service import entrenar_modelo, cargar_modelo_activo, obtener_matriz_entrenamiento, proyeccion_pca_2d, etiquetar_clusters
+from src.application.entrenamiento_service import entrenar_modelo, cargar_modelo_activo, obtener_matriz_entrenamiento, proyeccion_pca_2d, etiquetar_clusters, obtener_historial_modelos, activar_modelo_historico
 
 # Importar nuestro generador PDF
 from src.infrastructure.services.pdf_service import crear_reporte_pdf
@@ -520,6 +520,11 @@ def usuarios_a_dataframe():
             if u.vector:
                 fila.update({"R": u.vector.r, "I": u.vector.i, "A": u.vector.a,
                              "S": u.vector.s, "E": u.vector.e, "C": u.vector.c})
+                puntajes = {'R': u.vector.r, 'I': u.vector.i, 'A': u.vector.a,
+                            'S': u.vector.s, 'E': u.vector.e, 'C': u.vector.c}
+                fila["dominante"] = max(puntajes, key=puntajes.get)
+            else:
+                fila["dominante"] = None
             registros.append(fila)
         return pd.DataFrame(registros)
     finally:
@@ -1049,18 +1054,39 @@ elif pestana == "Carga y Visualización":
     if df.empty:
         st.info("Aún no hay registros. Carga un CSV o ejecuta `seed.py` desde consola.")
     else:
+        df_filtrado = df.copy()
+
+        # Obtener resultados del modelo activo para filtrar por cluster
+        modelo_activo, _ = cargar_modelo_activo()
+        if modelo_activo:
+            df_resultados = resultados_a_dataframe(modelo_id=modelo_activo.id)
+            if not df_resultados.empty:
+                # Hacer merge left para añadir la etiqueta_riasec
+                df = df.merge(df_resultados[["usuario_id", "etiqueta_riasec"]], on="usuario_id", how="left")
+                df_filtrado = df.copy()
+
         col1, col2 = st.columns(2)
         with col1:
             filtro_sexo = st.multiselect("Filtrar por sexo", options=df["sexo"].dropna().unique().tolist())
-
+            opciones_dom = df["dominante"].dropna().unique().tolist() if "dominante" in df.columns else []
+            filtro_dom = st.multiselect("Dimensión Dominante", options=opciones_dom)
+            
         with col2:
             fecha_min = df["fecha_registro"].min()
             fecha_max = df["fecha_registro"].max()
             rango_fecha = st.date_input("Rango de fecha de registro", (fecha_min.date(), fecha_max.date()))
+            if "etiqueta_riasec" in df.columns:
+                opciones_cluster = df["etiqueta_riasec"].dropna().unique().tolist()
+                filtro_cluster = st.multiselect("Clúster Asignado", options=opciones_cluster)
+            else:
+                filtro_cluster = []
 
-        df_filtrado = df.copy()
         if filtro_sexo:
             df_filtrado = df_filtrado[df_filtrado["sexo"].isin(filtro_sexo)]
+        if filtro_dom:
+            df_filtrado = df_filtrado[df_filtrado["dominante"].isin(filtro_dom)]
+        if filtro_cluster:
+            df_filtrado = df_filtrado[df_filtrado["etiqueta_riasec"].isin(filtro_cluster)]
 
         if isinstance(rango_fecha, tuple) and len(rango_fecha) == 2:
             df_filtrado = df_filtrado[
@@ -1231,7 +1257,7 @@ elif pestana == "Entrenamiento del Modelo":
     st.markdown("#### Configuración del Entrenamiento")
     st.caption("El modelo agrupa los vectores [R, I, A, S, E, C] de forma no supervisada y etiqueta cada grupo según la dimensión dominante.")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         n_componentes = st.number_input(
             "Número de grupos vocacionales",
@@ -1239,11 +1265,21 @@ elif pestana == "Entrenamiento del Modelo":
             help="Cuántos grupos de perfiles vocacionales distintos buscará el modelo. Recomendado: 6 (uno por dimensión RIASEC)."
         )
     with col2:
-        covariance_type = st.selectbox(
-            "Tipo de covarianza",
-            ["full", "tied", "diag", "spherical"],
-            help="'full' (recomendado): cada grupo tiene su propia forma. 'spherical': todos los grupos son circulares (más simple)."
+        algoritmo = st.selectbox(
+            "Algoritmo",
+            ["GaussianMixture", "KMeans"],
+            help="KMeans hace grupos rígidos (rápidos), GaussianMixture permite que un usuario pertenezca a varios (probabilístico)."
         )
+    with col3:
+        if algoritmo == "GaussianMixture":
+            covariance_type = st.selectbox(
+                "Tipo de covarianza",
+                ["full", "tied", "diag", "spherical"],
+                help="'full' (recomendado): cada grupo tiene su propia forma. 'spherical': todos los grupos son circulares (más simple)."
+            )
+        else:
+            covariance_type = "N/A"
+            st.info("No aplica para KMeans")
 
     col_btn, col_info = st.columns([1, 3])
     with col_btn:
@@ -1261,7 +1297,7 @@ elif pestana == "Entrenamiento del Modelo":
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         with st.spinner("Analizando y agrupando perfiles RIASEC..."):
             try:
-                resultado = entrenar_modelo(n_componentes=n_componentes, covariance_type=covariance_type)
+                resultado = entrenar_modelo(n_componentes=n_componentes, covariance_type=covariance_type, algoritmo=algoritmo)
                 st.success(f"Modelo **#{resultado['modelo_id']}** entrenado con **{resultado['n_registros']}** estudiantes.")
 
                 m1, m2, m3 = st.columns(3)
@@ -1275,17 +1311,15 @@ elif pestana == "Entrenamiento del Modelo":
                     )
                     st.markdown(semaforo_html(sil_val), unsafe_allow_html=True)
                 with m2:
-                    st.metric(
-                        "BIC",
-                        f"{resultado['bic']:.1f}",
-                        help="Bayesian Information Criterion: penaliza la complejidad del modelo. Menor = mejor."
-                    )
+                    if resultado['bic'] is not None:
+                        st.metric("BIC", f"{resultado['bic']:.1f}", help="Bayesian Information Criterion: penaliza la complejidad del modelo. Menor = mejor.")
+                    else:
+                        st.metric("BIC", "N/A", help="No aplica para KMeans")
                 with m3:
-                    st.metric(
-                        "AIC",
-                        f"{resultado['aic']:.1f}",
-                        help="Akaike Information Criterion: similar al BIC. Menor = mejor."
-                    )
+                    if resultado['aic'] is not None:
+                        st.metric("AIC", f"{resultado['aic']:.1f}", help="Akaike Information Criterion: similar al BIC. Menor = mejor.")
+                    else:
+                        st.metric("AIC", "N/A", help="No aplica para KMeans")
 
                 st.markdown("---")
                 st.markdown("#### Perfiles Vocacionales Identificados")
@@ -1298,6 +1332,41 @@ elif pestana == "Entrenamiento del Modelo":
             except ValueError as e:
                 st.error(f"{str(e)}")
         st.markdown('</div>', unsafe_allow_html=True)
+
+    # Historial de Modelos
+    st.markdown('<div class="panel-card" style="margin-top: 1rem;">', unsafe_allow_html=True)
+    st.markdown("#### Historial de Modelos")
+    historial = obtener_historial_modelos()
+    if not historial:
+        st.info("No hay modelos entrenados en el historial.")
+    else:
+        datos_historial = []
+        for m in historial:
+            datos_historial.append({
+                "ID": m.id,
+                "Fecha": m.fecha_entrenamiento.strftime("%Y-%m-%d %H:%M"),
+                "Algoritmo": m.algoritmo,
+                "Grupos": m.n_componentes,
+                "Silueta": round(m.silhouette_score, 4) if m.silhouette_score else "N/A",
+                "Estado": "ACTIVO 🟢" if m.activo else "Inactivo ⚪"
+            })
+        
+        st.dataframe(pd.DataFrame(datos_historial), hide_index=True, width='stretch')
+        
+        st.markdown("##### Activar un modelo anterior")
+        col_sel, col_btn2 = st.columns([2, 1])
+        with col_sel:
+            opciones_modelos = {f"ID: {m.id} | {m.algoritmo} | {m.fecha_entrenamiento.strftime('%Y-%m-%d')}": m.id for m in historial}
+            modelo_seleccionado = st.selectbox("Selecciona el modelo que deseas activar:", options=list(opciones_modelos.keys()))
+        with col_btn2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Activar Modelo", key="btn_activar"):
+                if activar_modelo_historico(opciones_modelos[modelo_seleccionado]):
+                    st.success("¡Modelo activado exitosamente!")
+                    st.rerun()
+                else:
+                    st.error("Hubo un problema al activar el modelo.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------
