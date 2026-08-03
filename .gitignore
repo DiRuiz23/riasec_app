@@ -1,0 +1,55 @@
+# .gitignore for riasec_app Python project
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+*.egg-info/
+.dist-info/
+build/
+develop-eggs/
+# Uncomment if you have a setup.py
+# *.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+.env/
+.env*/
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date, version, etc.
+#  exclude them from version control.
+*.manifest
+*.spec
+
+# Pytest cache
+.pytest_cache/
+
+# Unit test / coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.*,cover
+
+# mypy
+.mypy_cache/
+.dmypy.json
+.dmypy.json.*/
+
+# Pyre type checker
+.pyre/
+
+# End of file
+
+# Project-specific ignores
+riasec.db
+modelos/*.pkl
