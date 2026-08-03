@@ -30,6 +30,18 @@ Base = declarative_base()
 # --------------------------------------------------------------------------
 # Tablas
 # --------------------------------------------------------------------------
+class Dataset(Base):
+    """Dataset tabular subido por el usuario para clustering genérico."""
+    __tablename__ = "datasets"
+
+    id = Column(Integer, primary_key=True)
+    source_name = Column(String(255), nullable=False)
+    columns = Column(Text, nullable=False)  # JSON list
+    records = Column(Text, nullable=False)  # JSON list of dicts
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    modelos = relationship("ModeloEntrenado", back_populates="dataset")
+
 class Pregunta(Base):
     """Catalogo fijo de las 18 preguntas ponderadas + 1 demografica (peso null)."""
     __tablename__ = "preguntas"
@@ -114,9 +126,11 @@ class ModeloEntrenado(Base):
     bic = Column(Float, nullable=True)
     aic = Column(Float, nullable=True)
     ruta_archivo = Column(String(255), nullable=False)
-    activo = Column(Integer, default=1)  # 1 = modelo vigente para inferencia
+    activo = Column(Integer, default=0)  # 0 = inactivo, 1 = modelo vigente para inferencia
+    dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=False)
 
     resultados = relationship("ResultadoClustering", back_populates="modelo")
+    dataset = relationship("Dataset", back_populates="modelos")
 
 
 class ResultadoClustering(Base):

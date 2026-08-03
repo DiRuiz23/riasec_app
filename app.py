@@ -13,6 +13,7 @@ import json
 import io
 import datetime
 import unicodedata
+from pathlib import Path
 import pandas as pd
 import streamlit as st
 import plotly.express as px
@@ -20,9 +21,11 @@ import plotly.graph_objects as go
 
 from db import (
     init_db, get_session, Usuario, Pregunta, OpcionPregunta, Respuesta,
-    VectorRiasec, ModeloEntrenado, ResultadoClustering
+    VectorRiasec, ModeloEntrenado, ResultadoClustering, Dataset
 )
 from cuestionario import PREGUNTAS, DIMENSIONES, NOMBRES_DIMENSION, agregar_vector
+from utils import hex_to_rgba, comparar_clusters_con_columna, obtener_centroides, seleccionar_columnas_para_merge
+import joblib
 from estadistica import media, desviacion_estandar, moda, mediana, distribucion_por_categoria, resumen_dimensiones
 from entrenamiento import entrenar_modelo, cargar_modelo_activo, obtener_matriz_entrenamiento, proyeccion_pca_2d
 
@@ -336,6 +339,33 @@ header { visibility: hidden; }
 def usuarios_a_dataframe():
     session = get_session()
     try:
+        dataset_id = st.session_state.get("dataset_actual_id")
+        dataset = None
+        if dataset_id is not None:
+            dataset = session.query(Dataset).filter_by(id=dataset_id).first()
+        if dataset is None:
+            dataset = (
+                session.query(Dataset)
+                .order_by(Dataset.uploaded_at.desc(), Dataset.id.desc())
+                .first()
+            )
+
+        if dataset is not None:
+            try:
+                columnas = json.loads(dataset.columns or "[]")
+                registros = json.loads(dataset.records or "[]")
+            except Exception:
+                columnas = []
+                registros = []
+
+            if registros:
+                df = pd.DataFrame(registros)
+                if columnas:
+                    df.columns = [str(col) for col in columnas]
+                return df
+            if columnas:
+                return pd.DataFrame(columns=[str(col) for col in columnas])
+
         registros = []
         usuarios = session.query(Usuario).all()
         for u in usuarios:
@@ -389,6 +419,32 @@ def section_header(title, badge=""):
         {badge_html}
     </div>
     """, unsafe_allow_html=True)
+
+
+def resetear_estado_modelo():
+    session = get_session()
+    try:
+        session.query(ResultadoClustering).delete()
+        session.query(ModeloEntrenado).delete()
+        session.query(Dataset).delete()
+        session.query(Respuesta).delete()
+        session.query(VectorRiasec).delete()
+        session.query(Usuario).delete()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+    for path in Path("modelos").glob("*.pkl"):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+    for key in ["df_filtrado", "archivo_cargado"]:
+        st.session_state.pop(key, None)
 
 
 # --------------------------------------------------------------------------
@@ -590,10 +646,13 @@ if pestana == "Dashboard":
                 "usuario_id": usuario_ids,
                 "PCA_1": proyeccion[:, 0],
                 "PCA_2": proyeccion[:, 1],
-            }).merge(df_resultados[["usuario_id", "etiqueta_riasec"]], on="usuario_id", how="left")
+            })
+            cols_to_merge = seleccionar_columnas_para_merge(df_resultados)
+            if cols_to_merge:
+                df_plot = df_plot.merge(df_resultados[cols_to_merge], left_on="usuario_id", right_on=cols_to_merge[0], how="left")
             fig_pca = px.scatter(
-                df_plot, x="PCA_1", y="PCA_2", color="etiqueta_riasec",
-                hover_data=["usuario_id"],
+                df_plot, x="PCA_1", y="PCA_2", color="etiqueta_riasec" if "etiqueta_riasec" in df_plot.columns else df_plot.columns[-1],
+                hover_data=[c for c in ["usuario_id", df_plot.columns[0]] if c in df_plot.columns],
                 color_discrete_sequence=px.colors.qualitative.Set2,
                 labels={"PCA_1": "Componente 1", "PCA_2": "Componente 2", "etiqueta_riasec": "Perfil"},
             )
@@ -614,20 +673,34 @@ if pestana == "Dashboard":
         with col_right:
             st.markdown('<div class="panel-card"><h4> Radar de Clústeres — Perfil de Centroides</h4>', unsafe_allow_html=True)
             from entrenamiento import etiquetar_clusters
-            centroides = modelo.means_
-            etiquetas = etiquetar_clusters(centroides)
+
+            session = get_session()
+            _, X = obtener_matriz_entrenamiento(session)
+            session.close()
+
+            columnas_modelo = modelo.get("columnas") if isinstance(modelo, dict) else None
+            if not columnas_modelo:
+                columnas_modelo = [f"dim_{i}" for i in range(X.shape[1])] if X.size else []
+            df_x = pd.DataFrame(X, columns=columnas_modelo)
+            centroides_df = obtener_centroides(modelo, df_x, pd.Series([0] * len(df_x)))
+            centroides = centroides_df.to_numpy()
+            etiquetas = etiquetar_clusters(centroides_df, X_columns=list(centroides_df.columns))
+
             fig_radar = go.Figure()
             colores_radar = ["#3B82F6", "#22C55E", "#F59E0B", "#8B5CF6", "#EF4444", "#06B6D4"]
             for idx, centro in enumerate(centroides):
                 color = colores_radar[idx % len(colores_radar)]
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=list(centro) + [centro[0]],
-                    theta=DIMENSIONES + [DIMENSIONES[0]],
-                    fill="toself",
-                    name=f"C{idx}: {etiquetas[idx].replace('Predominantemente ', '')}",
-                    line=dict(color=color, width=2),
-                    fillcolor=color.replace("#", "rgba(").replace("F6", "F6,0.15)") if "F6" in color else color + "26",
-                ))
+                try:
+                    fig_radar.add_trace(go.Scatterpolar(
+                        r=list(centro) + [centro[0]],
+                        theta=list(centroides_df.columns) + [centroides_df.columns[0]],
+                        fill="toself",
+                        name=f"C{idx}: {etiquetas.get(idx, str(idx)).replace('Predominantemente ', '')}",
+                        line=dict(color=color, width=2),
+                        fillcolor=hex_to_rgba(color, 0.15),
+                    ))
+                except Exception as e:
+                    st.error(f"Error generando radar para cluster {idx}: {e}")
             fig_radar.update_layout(
                 height=360,
                 polar=dict(
@@ -709,10 +782,24 @@ if pestana == "Dashboard":
         with col_c:
             st.markdown('<div class="panel-card"><h4> Últimos Registros</h4>', unsafe_allow_html=True)
             cols_mostrar = [c for c in ["usuario_id", "sexo", "edad", "carrera_interes", "fecha_registro"] if c in df.columns]
-            ultimos = df.sort_values("fecha_registro", ascending=False).head(8)[cols_mostrar]
+            if not cols_mostrar:
+                cols_mostrar = list(df.columns[:8])
+
+            ultimos = df.copy()
             if "fecha_registro" in ultimos.columns:
-                ultimos["fecha_registro"] = pd.to_datetime(ultimos["fecha_registro"]).dt.strftime("%Y-%m-%d")
-            st.dataframe(ultimos, width='stretch', hide_index=True)
+                try:
+                    ultimos = ultimos.assign(_fecha=pd.to_datetime(ultimos["fecha_registro"], errors="coerce"))
+                    ultimos = ultimos.sort_values(by="_fecha", ascending=False, na_position="last")
+                    ultimos = ultimos.head(8)
+                    ultimos["fecha_registro"] = ultimos["_fecha"].dt.strftime("%Y-%m-%d")
+                    ultimos = ultimos[cols_mostrar + ["_fecha"]]
+                    ultimos = ultimos.drop(columns=["_fecha"])
+                except Exception:
+                    ultimos = ultimos.head(8)
+            else:
+                ultimos = ultimos.head(8)
+
+            st.dataframe(ultimos[cols_mostrar], width='stretch', hide_index=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -727,78 +814,42 @@ elif pestana == "Carga y Visualización":
     st.markdown('<div class="panel-card">', unsafe_allow_html=True)
     st.markdown("####  Subir Dataset Externo (CSV)")
     st.caption(
-        "Formatos soportados: **CSV estándar** con columnas `sexo`, `edad`, `R`, `I`, `A`, `S`, `E`, `C` "
-        "— o directamente el **CSV exportado de Google Forms** (se convierte automáticamente)."
+        "Acepta cualquier tabla tabular en CSV o Excel. El sistema usará las columnas disponibles del dataset y no exigirá un esquema fijo."
     )
-    archivo = st.file_uploader("Selecciona un archivo CSV", type=["csv"])
+    archivo = st.file_uploader("Selecciona un archivo CSV o Excel", type=["csv", "xlsx"])
 
     if archivo is not None:
-        df_raw = pd.read_csv(archivo)
-        columnas_estandar = {"sexo", "R", "I", "A", "S", "E", "C"}
-        es_forms = es_csv_google_forms(df_raw)
-
-        if es_forms:
-            # ── Formato Google Forms ──────────────────────────────────────
-            st.info(
-                "📋 **Formato Google Forms detectado** — Las respuestas de texto se convierten "
-                "automáticamente a puntajes RIASEC (0–6). "
-                "`edad` y `carrera_interes` no están disponibles en este formulario."
-            )
-            df_nuevo = parsear_csv_google_forms(df_raw)
-            st.success(f"✅ {len(df_nuevo)} registros convertidos correctamente.")
-            with st.expander("👁 Vista previa de los datos convertidos (primeros 5)", expanded=True):
-                st.dataframe(df_nuevo.head(5), use_container_width=True, hide_index=True)
-
-        elif columnas_estandar.issubset(set(df_raw.columns)):
-            # ── Formato estándar ──────────────────────────────────────────
-            df_nuevo = df_raw
-            st.success(f"✅ Archivo válido — {len(df_nuevo)} registros detectados.")
+        try:
+            if archivo.name.endswith(".csv"):
+                df_raw = pd.read_csv(archivo)
+            else:
+                df_raw = pd.read_excel(archivo)
+                
+            st.success(f"✅ Archivo leído correctamente — {len(df_raw)} registros detectados.")
             with st.expander("👁 Vista previa (primeros 5)", expanded=True):
-                st.dataframe(df_nuevo.head(5), use_container_width=True, hide_index=True)
+                st.dataframe(df_raw.head(5), width='stretch', hide_index=True)
 
-        else:
-            # ── Error: formato desconocido ────────────────────────────────
-            st.error(
-                "❌ Formato de archivo no reconocido.\n\n"
-                "**Opciones válidas:**\n"
-                "- CSV estándar con columnas: `sexo`, `edad`, `R`, `I`, `A`, `S`, `E`, `C`\n"
-                "- CSV exportado directamente de Google Forms (detección automática)"
-            )
-            with st.expander("🔍 Columnas encontradas en el archivo"):
-                st.write(list(df_raw.columns))
-            df_nuevo = None
-
-        if 'df_nuevo' in dir() and df_nuevo is not None:
-            if st.button("💾 Confirmar e insertar en la base de datos", type="primary"):
+            if st.button("💾 Guardar Dataset", type="primary"):
                 session = get_session()
                 try:
-                    insertados = 0
-                    for _, fila in df_nuevo.iterrows():
-                        edad_val = fila.get("edad")
-                        edad_int = int(edad_val) if pd.notna(edad_val) and edad_val is not None else None
-                        usuario = Usuario(
-                            sexo=fila.get("sexo"),
-                            edad=edad_int,
-                            carrera_interes=fila.get("carrera_interes"),
-                            fecha_registro=datetime.datetime.utcnow(),
-                        )
-                        session.add(usuario)
-                        session.flush()
-                        session.add(VectorRiasec(
-                            usuario_id=usuario.id,
-                            r=int(fila["R"]), i=int(fila["I"]),
-                            a=int(fila["A"]), s=int(fila["S"]),
-                            e=int(fila["E"]), c=int(fila["C"]),
-                        ))
-                        insertados += 1
+                    ds = Dataset(
+                        source_name=archivo.name,
+                        columns=json.dumps(df_raw.columns.tolist()),
+                        records=df_raw.to_json(orient="records")
+                    )
+                    session.add(ds)
                     session.commit()
-                    st.success(f"✅ Se insertaron **{insertados}** registros nuevos correctamente.")
+                    st.session_state["dataset_actual_id"] = ds.id
+                    st.success(f"✅ Dataset '{archivo.name}' guardado exitosamente con ID {ds.id}")
                     st.balloons()
                 except Exception as ex:
                     session.rollback()
-                    st.error(f"❌ Error al insertar: {ex}")
+                    st.error(f"❌ Error al guardar: {ex}")
                 finally:
                     session.close()
+        except Exception as e:
+            st.error(f"❌ Error al leer el archivo: {e}")
+            
     st.markdown('</div>', unsafe_allow_html=True)
 
     #  Tabla y filtros 
@@ -809,79 +860,55 @@ elif pestana == "Carga y Visualización":
     if df.empty:
         st.info(" Aún no hay registros. Carga un CSV o ejecuta `seed.py` desde consola.")
     else:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            filtro_sexo = st.multiselect("Filtrar por sexo", options=df["sexo"].dropna().unique().tolist())
+        df_filtrado = df.copy()
+        filtros = []
 
-        # Slider de edad solo si hay registros con edad definida
-        edad_valida = df["edad"].dropna()
-        with col2:
+        if "sexo" in df.columns:
+            opciones_sexo = [str(x) for x in df["sexo"].dropna().astype(str).unique().tolist() if str(x) != "nan"]
+            if opciones_sexo:
+                filtro_sexo = st.multiselect("Filtrar por sexo", options=sorted(opciones_sexo))
+                if filtro_sexo:
+                    df_filtrado = df_filtrado[df_filtrado["sexo"].astype(str).isin(filtro_sexo)]
+                    filtros.append("sexo")
+
+        if "edad" in df.columns:
+            edad_valida = pd.to_numeric(df["edad"], errors="coerce").dropna()
             if not edad_valida.empty:
-                rango_edad = st.slider(
-                    "Rango de edad",
-                    int(edad_valida.min()), int(edad_valida.max()),
-                    (int(edad_valida.min()), int(edad_valida.max()))
+                min_edad = int(edad_valida.min())
+                max_edad = int(edad_valida.max())
+                rango_edad = st.slider("Rango de edad", min_edad, max_edad, (min_edad, max_edad))
+                mascara_edad = (
+                    pd.to_numeric(df_filtrado["edad"], errors="coerce").isna() |
+                    ((pd.to_numeric(df_filtrado["edad"], errors="coerce") >= rango_edad[0]) &
+                     (pd.to_numeric(df_filtrado["edad"], errors="coerce") <= rango_edad[1]))
                 )
+                df_filtrado = df_filtrado[mascara_edad]
+                filtros.append("edad")
             else:
-                rango_edad = None
                 st.caption("⚠️ Sin datos de edad disponibles")
 
-        with col3:
-            fecha_min = df["fecha_registro"].min()
-            fecha_max = df["fecha_registro"].max()
-            rango_fecha = st.date_input("Rango de fecha de registro", (fecha_min.date(), fecha_max.date()))
-
-        df_filtrado = df.copy()
-        if filtro_sexo:
-            df_filtrado = df_filtrado[df_filtrado["sexo"].isin(filtro_sexo)]
-
-        # Filtro de edad: incluir siempre registros sin edad (NaN)
-        if rango_edad is not None:
-            mascara_edad = (
-                df_filtrado["edad"].isna() |
-                ((df_filtrado["edad"] >= rango_edad[0]) & (df_filtrado["edad"] <= rango_edad[1]))
-            )
-            df_filtrado = df_filtrado[mascara_edad]
-
-        if isinstance(rango_fecha, tuple) and len(rango_fecha) == 2:
-            df_filtrado = df_filtrado[
-                (df_filtrado["fecha_registro"].dt.date >= rango_fecha[0]) &
-                (df_filtrado["fecha_registro"].dt.date <= rango_fecha[1])
-            ]
+        if "fecha_registro" in df.columns:
+            try:
+                fechas = pd.to_datetime(df["fecha_registro"], errors="coerce")
+                if fechas.notna().any():
+                    fecha_min = fechas.min().date()
+                    fecha_max = fechas.max().date()
+                    rango_fecha = st.date_input("Rango de fecha de registro", (fecha_min, fecha_max))
+                    if isinstance(rango_fecha, tuple) and len(rango_fecha) == 2:
+                        fechas_filtradas = pd.to_datetime(df_filtrado["fecha_registro"], errors="coerce")
+                        mascara_fecha = (
+                            fechas_filtradas.isna() |
+                            ((fechas_filtradas.dt.date >= rango_fecha[0]) & (fechas_filtradas.dt.date <= rango_fecha[1]))
+                        )
+                        df_filtrado = df_filtrado[mascara_fecha]
+                        filtros.append("fecha")
+            except Exception:
+                pass
 
         st.markdown(f"<p style='color:#6B7280; font-size:0.85rem; margin-bottom:0.5rem;'>Mostrando <b>{len(df_filtrado)}</b> de <b>{len(df)}</b> registros</p>", unsafe_allow_html=True)
         st.dataframe(df_filtrado, width='stretch', hide_index=True)
         st.session_state["df_filtrado"] = df_filtrado
 
-        # Mini distribución visual de vectores RIASEC filtrados
-        if all(c in df_filtrado.columns for c in ["R", "I", "A", "S", "E", "C"]):
-            st.markdown("---")
-            st.markdown("####  Distribución Media de Dimensiones RIASEC (datos filtrados)")
-            promedios = df_filtrado[["R", "I", "A", "S", "E", "C"]].mean().reset_index()
-            promedios.columns = ["Dimensión", "Promedio"]
-            promedios["Nombre"] = promedios["Dimensión"].map(NOMBRES_DIMENSION)
-            fig_dim = px.bar(
-                promedios, x="Dimensión", y="Promedio",
-                text="Promedio",
-                color="Promedio",
-                color_continuous_scale=["#BFDBFE", "#1D4ED8"],
-                labels={"Dimensión": "Dimensión RIASEC", "Promedio": "Media"},
-                custom_data=["Nombre"],
-            )
-            fig_dim.update_traces(
-                texttemplate="%{text:.2f}",
-                textposition="outside",
-                hovertemplate="<b>%{customdata[0]}</b><br>Media: %{y:.2f}<extra></extra>",
-                marker_line_width=0,
-            )
-            fig_dim.update_layout(
-                height=300, margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="white", plot_bgcolor="white",
-                coloraxis_showscale=False,
-                yaxis=dict(range=[0, 7], showgrid=True, gridcolor="#F0F2F6"),
-                font=dict(family="Inter"),
-            )
-            st.plotly_chart(fig_dim, width='stretch')
     st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -895,80 +922,37 @@ elif pestana == "Estadística Descriptiva":
     if df.empty:
         st.info(" No hay datos suficientes. Carga información primero.")
     else:
-        vectores = df[["R", "I", "A", "S", "E", "C"]].rename(columns=str.lower).to_dict("records")
-        resumen = resumen_dimensiones(vectores)
+        columnas_numericas = [col for col in df.select_dtypes(include=["number"]).columns if col not in {"usuario_id", "edad"}]
+        if not columnas_numericas:
+            st.info("No hay columnas numéricas disponibles para resumir.")
+        else:
+            resumen_df = df[columnas_numericas].describe().T[["mean", "50%", "std", "min", "max"]].reset_index()
+            resumen_df.columns = ["Columna", "Media", "Mediana", "Desviación estándar", "Mínimo", "Máximo"]
 
-        #  Tabla resumen 
-        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
-        st.markdown("####  Resumen Estadístico por Dimensión RIASEC")
-        st.caption("Calculado con algoritmos propios: media, mediana, moda, desviación estándar, mínimo y máximo.")
-        df_resumen = pd.DataFrame(resumen).T
-        df_resumen.index.name = "Dimensión"
-        st.dataframe(df_resumen.style.format({"media": "{:.2f}", "mediana": "{:.2f}",
-                                               "desviacion_estandar": "{:.2f}"}),
-                     width='stretch')
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+            st.markdown("####  Resumen Estadístico por Columna Numérica")
+            st.dataframe(resumen_df, width='stretch', hide_index=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        #  Gráficas de cajas / distribución 
-        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
-        st.markdown("####  Dispersión por Dimensión (Box Plot)")
-        dim_cols = [c for c in ["R", "I", "A", "S", "E", "C"] if c in df.columns]
-        df_melt = df[dim_cols].melt(var_name="Dimensión", value_name="Puntuación")
-        df_melt["Nombre"] = df_melt["Dimensión"].map(NOMBRES_DIMENSION)
-        colores_box = {"R": "#3B82F6", "I": "#22C55E", "A": "#F59E0B", "S": "#EC4899", "E": "#8B5CF6", "C": "#06B6D4"}
-        fig_box = px.box(
-            df_melt, x="Dimensión", y="Puntuación",
-            color="Dimensión",
-            color_discrete_map=colores_box,
-            points="all",
-            hover_data=["Nombre"],
-            labels={"Puntuación": "Puntuación (0–6)", "Dimensión": "Dimensión RIASEC"},
-        )
-        fig_box.update_traces(marker=dict(size=4, opacity=0.5))
-        fig_box.update_layout(
-            height=360, margin=dict(l=10, r=10, t=10, b=10),
-            paper_bgcolor="white", plot_bgcolor="#F8FAFC",
-            showlegend=False,
-            yaxis=dict(range=[-0.5, 6.5], showgrid=True, gridcolor="#E5E7EB"),
-            font=dict(family="Inter"),
-        )
-        st.plotly_chart(fig_box, width='stretch')
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        #  Distribución por categoría 
-        st.markdown('<div class="panel-card">', unsafe_allow_html=True)
-        st.markdown("####  Distribución por Campo Categórico")
-        campo = st.selectbox("Selecciona campo", ["sexo", "carrera_interes"])
-        conteo, porcentaje = distribucion_por_categoria(df.to_dict("records"), campo)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            df_conteo = pd.DataFrame({"Categoría": list(conteo.keys()), "Cantidad": list(conteo.values())})
-            df_conteo = df_conteo.sort_values("Cantidad", ascending=True)
-            fig_cat = px.bar(
-                df_conteo, x="Cantidad", y="Categoría", orientation="h",
-                color="Cantidad",
-                color_continuous_scale=["#BFDBFE", "#1D4ED8"],
-                labels={"Cantidad": "N° de usuarios", "Categoría": ""},
+            st.markdown('<div class="panel-card">', unsafe_allow_html=True)
+            st.markdown("####  Dispersión por Columna Numérica (Box Plot)")
+            df_melt = df[columnas_numericas].melt(var_name="Columna", value_name="Valor")
+            fig_box = px.box(
+                df_melt, x="Columna", y="Valor",
+                color="Columna",
+                points="all",
+                labels={"Valor": "Valor", "Columna": "Columna"},
             )
-            fig_cat.update_layout(
-                height=max(200, len(conteo) * 35 + 80),
+            fig_box.update_layout(
+                height=360,
                 margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="white", plot_bgcolor="white",
-                coloraxis_showscale=False,
-                yaxis=dict(tickfont=dict(size=10)),
+                paper_bgcolor="white",
+                plot_bgcolor="#F8FAFC",
+                showlegend=False,
                 font=dict(family="Inter"),
             )
-            fig_cat.update_traces(marker_line_width=0)
-            st.plotly_chart(fig_cat, width='stretch')
-
-        with col2:
-            df_pct = pd.DataFrame({
-                "Categoría": list(porcentaje.keys()),
-                "Porcentaje (%)": list(porcentaje.values())
-            }).sort_values("Porcentaje (%)", ascending=False)
-            st.dataframe(df_pct, width='stretch', hide_index=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.plotly_chart(fig_box, width='stretch')
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
 # --------------------------------------------------------------------------
@@ -995,9 +979,11 @@ elif pestana == "Entrenamiento del Modelo":
             help="`full`: cada clúster tiene su propia matriz de covarianza completa (más flexible)."
         )
 
-    col_btn, col_info = st.columns([1, 3])
+    col_btn, col_reset, col_info = st.columns([1.2, 1.2, 3])
     with col_btn:
         entrenar_btn = st.button(" Entrenar Modelo", width='stretch')
+    with col_reset:
+        reset_btn = st.button(" Resetear Estado", type="secondary", width='stretch')
     with col_info:
         st.markdown("""
         <div style="background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px; padding:0.6rem 1rem; font-size:0.82rem; color:#1E40AF;">
@@ -1005,6 +991,13 @@ elif pestana == "Entrenamiento del Modelo":
         </div>
         """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
+    if reset_btn:
+        try:
+            resetear_estado_modelo()
+            st.success("✅ Estado reiniciado. Se eliminaron los modelos previos y sus resultados.")
+        except Exception as e:
+            st.error(f"❌ No se pudo reiniciar el estado: {e}")
 
     if entrenar_btn:
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
@@ -1051,7 +1044,10 @@ elif pestana == "Resultados":
             "usuario_id": usuario_ids,
             "PCA_1": proyeccion[:, 0],
             "PCA_2": proyeccion[:, 1],
-        }).merge(df_resultados[["usuario_id", "etiqueta_riasec"]], on="usuario_id", how="left")
+        })
+        cols_to_merge = seleccionar_columnas_para_merge(df_resultados)
+        if cols_to_merge:
+            df_plot = df_plot.merge(df_resultados[cols_to_merge], left_on="usuario_id", right_on=cols_to_merge[0], how="left")
 
         # KPIs rápidos
         r1, r2, r3 = st.columns(3)
@@ -1064,29 +1060,39 @@ elif pestana == "Resultados":
         # Scatter PCA
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         st.markdown("####  Clústeres Proyectados (PCA 6D → 2D)")
-        fig = px.scatter(
-            df_plot, x="PCA_1", y="PCA_2", color="etiqueta_riasec",
-            hover_data=["usuario_id"],
-            color_discrete_sequence=px.colors.qualitative.Set2,
-            labels={"PCA_1": "Componente Principal 1", "PCA_2": "Componente Principal 2", "etiqueta_riasec": "Perfil Vocacional"},
-        )
-        fig.update_traces(marker=dict(size=9, opacity=0.82, line=dict(width=0.5, color="white")))
-        fig.update_layout(
-            height=450,
-            paper_bgcolor="white", plot_bgcolor="#F8FAFC",
-            margin=dict(l=10, r=10, t=10, b=10),
-            legend=dict(font=dict(size=10, family="Inter"), orientation="v", x=1.01, y=1,
-                        bgcolor="rgba(255,255,255,0.8)", bordercolor="#E5E7EB", borderwidth=1),
-            font=dict(family="Inter"),
-        )
-        st.plotly_chart(fig, width='stretch')
+        if df_resultados.empty:
+            st.info("No hay resultados disponibles aún. Entrena un modelo y luego vuelve aquí para ver las asignaciones por usuario.")
+        else:
+            fig = px.scatter(
+                df_plot, x="PCA_1", y="PCA_2", color="etiqueta_riasec" if "etiqueta_riasec" in df_plot.columns else df_plot.columns[-1],
+                hover_data=[c for c in ["usuario_id", df_plot.columns[0]] if c in df_plot.columns],
+                color_discrete_sequence=px.colors.qualitative.Set2,
+                labels={"PCA_1": "Componente Principal 1", "PCA_2": "Componente Principal 2", "etiqueta_riasec": "Perfil Vocacional"},
+            )
+            fig.update_traces(marker=dict(size=9, opacity=0.82, line=dict(width=0.5, color="white")))
+            fig.update_layout(
+                height=450,
+                paper_bgcolor="white", plot_bgcolor="#F8FAFC",
+                margin=dict(l=10, r=10, t=10, b=10),
+                legend=dict(font=dict(size=10, family="Inter"), orientation="v", x=1.01, y=1,
+                            bgcolor="rgba(255,255,255,0.8)", bordercolor="#E5E7EB", borderwidth=1),
+                font=dict(family="Inter"),
+            )
+            st.plotly_chart(fig, width='stretch')
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Tabla de asignaciones
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         st.markdown("####  Tabla de Asignaciones por Usuario")
-        df_tabla = df_resultados[["usuario_id", "cluster_id", "etiqueta_riasec"]].copy()
-        st.dataframe(df_tabla, width='stretch', hide_index=True)
+        if df_resultados.empty:
+            st.info("No hay resultados disponibles aún. Entrena un modelo y luego vuelve aquí para ver las asignaciones por usuario.")
+        else:
+            columnas_disponibles = [col for col in ["usuario_id", "cluster_id", "etiqueta_riasec"] if col in df_resultados.columns]
+            if columnas_disponibles:
+                df_tabla = df_resultados[columnas_disponibles].copy()
+            else:
+                df_tabla = df_resultados.copy()
+            st.dataframe(df_tabla, width='stretch', hide_index=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
 
@@ -1101,8 +1107,18 @@ elif pestana == "Comparativa de Clústeres":
         st.info(" Aún no hay ningún modelo entrenado.")
     else:
         from entrenamiento import etiquetar_clusters
-        centroides = modelo.means_
-        etiquetas = etiquetar_clusters(centroides)
+
+        session = get_session()
+        _, X = obtener_matriz_entrenamiento(session)
+        session.close()
+
+        columnas_modelo = modelo.get("columnas") if isinstance(modelo, dict) else None
+        if not columnas_modelo:
+            columnas_modelo = [f"dim_{i}" for i in range(X.shape[1])] if X.size else []
+        df_x = pd.DataFrame(X, columns=columnas_modelo)
+        centroides_df = obtener_centroides(modelo, df_x, pd.Series([0] * len(df_x)))
+        centroides = centroides_df.to_numpy()
+        etiquetas = etiquetar_clusters(centroides_df, X_columns=list(centroides_df.columns))
 
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         st.markdown("####  Gráfico Radar — Medias por Dimensión por Clúster")
@@ -1113,15 +1129,18 @@ elif pestana == "Comparativa de Clústeres":
         fig = go.Figure()
         for idx, centro in enumerate(centroides):
             color = colores_radar[idx % len(colores_radar)]
-            fig.add_trace(go.Scatterpolar(
-                r=list(centro) + [centro[0]],
-                theta=DIMENSIONES + [DIMENSIONES[0]],
-                fill="toself",
-                name=f"C{idx}: {etiquetas[idx].replace('Predominantemente ', '')}",
-                line=dict(color=color, width=2.5),
-                fillcolor=color + "22",
-                opacity=0.9,
-            ))
+            try:
+                fig.add_trace(go.Scatterpolar(
+                    r=list(centro) + [centro[0]],
+                    theta=list(centroides_df.columns) + [centroides_df.columns[0]],
+                    fill="toself",
+                    name=f"C{idx}: {etiquetas.get(idx, str(idx)).replace('Predominantemente ', '')}",
+                    line=dict(color=color, width=2.5),
+                    fillcolor=hex_to_rgba(color, 0.15),
+                    opacity=0.9,
+                ))
+            except Exception as e:
+                st.error(f"Error renderizando cluster {idx}: {e}")
         fig.update_layout(
             height=520,
             polar=dict(
@@ -1142,10 +1161,10 @@ elif pestana == "Comparativa de Clústeres":
 
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         st.markdown("####  Tabla de Centroides por Clúster")
-        tabla_centroides = pd.DataFrame(centroides, columns=DIMENSIONES)
+        tabla_centroides = pd.DataFrame(centroides, columns=list(centroides_df.columns))
         tabla_centroides.insert(0, "Clúster", [f"C{i}" for i in range(len(centroides))])
         tabla_centroides.insert(1, "Perfil Vocacional", [etiquetas[i] for i in range(len(centroides))])
-        for col in DIMENSIONES:
+        for col in list(centroides_df.columns):
             tabla_centroides[col] = tabla_centroides[col].round(3)
         st.dataframe(tabla_centroides, width='stretch', hide_index=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1259,7 +1278,18 @@ elif pestana == "Descargas":
     modelo, registro = cargar_modelo_activo()
     if modelo is not None:
         from entrenamiento import etiquetar_clusters
-        etiquetas = etiquetar_clusters(modelo.means_)
+        session = get_session()
+        _, X = obtener_matriz_entrenamiento(session)
+        session.close()
+
+        columnas_modelo = modelo.get("columnas") if isinstance(modelo, dict) else None
+        if not columnas_modelo:
+            columnas_modelo = [f"dim_{i}" for i in range(X.shape[1])] if X.size else []
+        df_x = pd.DataFrame(X, columns=columnas_modelo)
+        centroides_df = obtener_centroides(modelo, df_x, pd.Series([0] * len(df_x)))
+        centroides_list = centroides_df.to_numpy()
+
+        etiquetas = etiquetar_clusters(centroides_df, X_columns=list(centroides_df.columns))
         lineas = [
             "=" * 60,
             " REPORTE CUALITATIVO — PERFIL VOCACIONAL RIASEC",
@@ -1270,11 +1300,12 @@ elif pestana == "Descargas":
             "",
         ]
         for idx, etiqueta in etiquetas.items():
-            centro = modelo.means_[idx]
+            centro = centroides_list[idx]
             lineas.append(f"Clúster {idx}: {etiqueta}")
-            lineas.append(f"Perfil promedio [R, I, A, S, E, C]: {[round(v, 3) for v in centro]}")
-            dom = sorted(zip(DIMENSIONES, centro), key=lambda x: x[1], reverse=True)
-            lineas.append(f"Dimensión dominante: {NOMBRES_DIMENSION[dom[0][0].upper()]} ({dom[0][1]:.2f})")
+            lineas.append(f"Perfil promedio [{', '.join(columnas_modelo)}]: {[round(v, 3) for v in centro]}")
+            dom = sorted(zip(columnas_modelo, centro), key=lambda x: x[1], reverse=True)
+            dominante = dom[0][0]
+            lineas.append(f"Dimensión dominante: {dominante} ({dom[0][1]:.2f})")
             lineas.append("")
 
         texto_reporte = "\n".join(lineas)
@@ -1294,7 +1325,18 @@ elif pestana == "Descargas":
         st.markdown('<div class="panel-card">', unsafe_allow_html=True)
         st.markdown("####  Metadatos del Modelo Activo (JSON)")
         from entrenamiento import etiquetar_clusters
-        etiquetas = etiquetar_clusters(modelo.means_)
+        session = get_session()
+        _, X = obtener_matriz_entrenamiento(session)
+        session.close()
+
+        columnas_modelo = modelo.get("columnas") if isinstance(modelo, dict) else None
+        if not columnas_modelo:
+            columnas_modelo = [f"dim_{i}" for i in range(X.shape[1])] if X.size else []
+        df_x = pd.DataFrame(X, columns=columnas_modelo)
+        centroides_df = obtener_centroides(modelo, df_x, pd.Series([0] * len(df_x)))
+        centroides_list = centroides_df.to_numpy()
+
+        etiquetas = etiquetar_clusters(centroides_df, X_columns=list(centroides_df.columns))
         meta_json = {
             "modelo_id": registro.id,
             "algoritmo": registro.algoritmo,
@@ -1306,7 +1348,7 @@ elif pestana == "Descargas":
             "n_registros_entrenamiento": registro.n_registros_entrenamiento,
             "fecha_entrenamiento": str(registro.fecha_entrenamiento),
             "etiquetas_cluster": etiquetas,
-            "centroides": {f"cluster_{k}": dict(zip(DIMENSIONES, v.tolist())) for k, v in enumerate(modelo.means_)},
+            "centroides": {f"cluster_{k}": dict(zip(columnas_modelo, v.tolist())) for k, v in enumerate(centroides_list)},
         }
         json_str = json.dumps(meta_json, indent=2, ensure_ascii=False)
         st.download_button(
@@ -1316,3 +1358,40 @@ elif pestana == "Descargas":
             mime="application/json",
         )
         st.markdown('</div>', unsafe_allow_html=True)
+
+
+        # --- Exportación a PDF ---
+        st.markdown("####  Exportar Informe PDF")
+        st.caption("Genera un informe con los metadatos y configuración del modelo activo.")
+        from fpdf import FPDF
+
+        if st.button("Descargar Informe (PDF)"):
+            try:
+                pdf = FPDF()
+                pdf.set_auto_page_break(auto=True, margin=15)
+                pdf.add_page()
+                pdf.set_font("helvetica", "B", 14)
+                pdf.cell(0, 10, text="Informe de Análisis y Clustering")
+                pdf.ln(3)
+                pdf.set_font("helvetica", size=10)
+                pdf.multi_cell(0, 8, text=f"Algoritmo: {getattr(registro, 'algoritmo', 'N/A')}")
+                pdf.multi_cell(0, 8, text=f"Componentes/Clusters: {getattr(registro, 'n_componentes', 'N/A')}")
+                pdf.multi_cell(0, 8, text=f"Silhouette Score: {getattr(registro, 'silhouette_score', 'N/A')}")
+                pdf.multi_cell(0, 8, text=f"Registros entrenados: {getattr(registro, 'n_registros_entrenamiento', 'N/A')}")
+                pdf.multi_cell(0, 8, text=f"Fecha de entrenamiento: {getattr(registro, 'fecha_entrenamiento', 'N/A')}")
+
+                pdf_output = pdf.output(dest="S")
+                if isinstance(pdf_output, str):
+                    pdf_bytes = pdf_output.encode("latin-1")
+                else:
+                    pdf_bytes = pdf_output
+
+                st.download_button(
+                    "Guardar PDF",
+                    data=pdf_bytes,
+                    file_name="informe_clustering.pdf",
+                    mime="application/pdf",
+                )
+            except Exception as e:
+                st.error(f"Error generando PDF: {e}")
+        # ---------------------------------
