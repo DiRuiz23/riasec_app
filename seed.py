@@ -12,8 +12,8 @@ demanda del usuario final.
 
 import random
 import datetime
-from db import init_db, get_session, Usuario, Pregunta, OpcionPregunta, Respuesta, VectorRiasec
-from cuestionario import PREGUNTAS, agregar_vector
+from src.infrastructure.database.db import init_db, get_session, Usuario, Pregunta, OpcionPregunta, Respuesta, VectorRiasec
+from src.application.cuestionario_service import PREGUNTAS, agregar_vector
 
 random.seed(42)  # semilla fija: reproducible, no "aleatorio" en cada corrida
 

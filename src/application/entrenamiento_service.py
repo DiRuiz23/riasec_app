@@ -14,8 +14,8 @@ from sklearn.mixture import GaussianMixture
 from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 
-from db import get_session, VectorRiasec, Usuario, ModeloEntrenado, ResultadoClustering
-from cuestionario import NOMBRES_DIMENSION
+from src.infrastructure.database.db import get_session, VectorRiasec, Usuario, ModeloEntrenado, ResultadoClustering
+from src.application.cuestionario_service import NOMBRES_DIMENSION
 
 CARPETA_MODELOS = "modelos"
 os.makedirs(CARPETA_MODELOS, exist_ok=True)
