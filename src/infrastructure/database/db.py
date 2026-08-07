@@ -6,6 +6,7 @@ SÓLO almacena estadísticas generadas, características del modelo, fechas y ve
 """
 import os
 import datetime
+from contextlib import contextmanager
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean
 )
@@ -72,3 +73,23 @@ def init_db():
 
 def get_session():
     return SessionLocal()
+
+@contextmanager
+def managed_session():
+    """
+    Context manager para uso seguro de la sesión.
+    Garantiza cierre de sesión incluso ante excepciones.
+    
+    Uso:
+        with managed_session() as session:
+            session.query(...)
+    """
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

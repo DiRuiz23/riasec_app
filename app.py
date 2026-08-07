@@ -1,11 +1,12 @@
-# Entrypoint para compatibilidad hacia atrás
+# Entrypoint para Streamlit — redirige a src/presentation/streamlit_ui.py
+import runpy
 import sys
 import os
 
-# Asegurar que el directorio raíz está en el path para las importaciones de src
+# Asegurar que el directorio raíz está en el path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-filepath = os.path.join(os.path.dirname(__file__), "src", "presentation", "streamlit_ui.py")
-with open(filepath, "r", encoding="utf-8") as f:
-    code = compile(f.read(), filepath, 'exec')
-    exec(code, globals(), locals())
+runpy.run_path(
+    os.path.join(os.path.dirname(__file__), "src", "presentation", "streamlit_ui.py"),
+    run_name="__main__",
+)

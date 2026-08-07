@@ -1,10 +1,10 @@
 """
-cuestionario.py
+cuestionario_service.py
 Catalogo fijo de las 18 preguntas RIASEC + 1 pregunta demografica,
-y funcion de agregacion que convierte respuestas crudas en el vector [R,I,A,S,E,C].
-Esta es la unica fuente de verdad del cuestionario: la interfaz y la carga de
-datasets externos deben respetar esta estructura de columnas.
+función de agregación que convierte respuestas crudas en el vector [R,I,A,S,E,C],
+diccionario de carreras sugeridas por dimensión y validación de mapeo CSV.
 """
+from typing import Optional
 
 # Cada tupla: (numero, dimension, texto, [(texto_opcion, peso), ...])
 PREGUNTAS = [
@@ -60,6 +60,34 @@ NOMBRES_DIMENSION = {
     "S": "Social", "E": "Emprendedor", "C": "Convencional",
 }
 
+# ── Carreras sugeridas por dimensión dominante (Holland, 1997) ─────────────────
+CARRERAS_RIASEC: dict[str, list[str]] = {
+    "R": [
+        "Ingeniería Mecánica", "Ingeniería Civil", "Arquitectura",
+        "Agronomía", "Técnico Electrónico", "Geología", "Construcción",
+    ],
+    "I": [
+        "Medicina", "Biología", "Física", "Matemáticas",
+        "Química", "Ciencias de Datos", "Astronomía", "Neurociencias",
+    ],
+    "A": [
+        "Diseño Gráfico", "Artes Visuales", "Arquitectura", "Música",
+        "Comunicación", "Cine y Televisión", "Fotografía", "Publicidad",
+    ],
+    "S": [
+        "Psicología", "Trabajo Social", "Enfermería", "Pedagogía",
+        "Terapia Ocupacional", "Sociología", "Orientación Educativa",
+    ],
+    "E": [
+        "Administración de Empresas", "Mercadotecnia", "Derecho",
+        "Relaciones Internacionales", "Emprendimiento", "Ventas",
+    ],
+    "C": [
+        "Contabilidad", "Finanzas", "Administración Pública",
+        "Estadística", "Logística", "Auditoría", "Sistemas de Información",
+    ],
+}
+
 
 def agregar_vector(respuestas_peso: dict) -> dict:
     """
@@ -73,3 +101,47 @@ def agregar_vector(respuestas_peso: dict) -> dict:
         peso = respuestas_peso.get(num, 0)
         vector[dim] += peso
     return vector
+
+
+def validar_mapeo_csv(df_csv, mapeo_respuestas: dict) -> list[str]:
+    """
+    Detecta valores en el CSV que no están en el mapeo de respuestas
+    y devuelve una lista de advertencias descriptivas.
+    
+    Esto previene que respuestas no mapeadas queden silenciosamente en 0
+    distorsionando los puntajes.
+    """
+    advertencias = []
+    cols = df_csv.columns.tolist()
+    # Columnas de preguntas: índices 2-19 (después de marca temporal y sexo)
+    cols_preguntas = cols[2:20] if len(cols) >= 20 else cols[2:]
+    
+    for col in cols_preguntas:
+        valores_unicos = df_csv[col].dropna().unique()
+        no_mapeados = [v for v in valores_unicos if str(v) not in mapeo_respuestas]
+        if no_mapeados:
+            advertencias.append(
+                f"Columna **'{col}'**: {len(no_mapeados)} valor(es) sin mapeo → "
+                f"`{', '.join(str(v) for v in no_mapeados[:3])}`"
+                + (" ..." if len(no_mapeados) > 3 else "")
+            )
+    return advertencias
+
+
+def obtener_carreras_para_perfil(dim_dominante: str) -> list[str]:
+    """
+    Retorna las carreras sugeridas para una dimensión dominante.
+    Si la dimensión es compuesta (ej. 'R-I'), combina ambas listas.
+    """
+    dims = dim_dominante.upper().split("-")
+    carreras = []
+    for d in dims:
+        carreras.extend(CARRERAS_RIASEC.get(d, []))
+    # Eliminar duplicados preservando orden
+    vistas = set()
+    resultado = []
+    for c in carreras:
+        if c not in vistas:
+            vistas.add(c)
+            resultado.append(c)
+    return resultado
