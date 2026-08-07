@@ -39,6 +39,7 @@ class ModeloEntrenado(Base):
     n_registros_entrenamiento = Column(Integer, nullable=False)
     bic = Column(Float, nullable=True)
     aic = Column(Float, nullable=True)
+    ruta_archivo = Column(String(255), nullable=True)
     
     activo = Column(Boolean, default=True)
 

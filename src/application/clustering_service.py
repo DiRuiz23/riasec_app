@@ -11,6 +11,8 @@ from datetime import datetime
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import silhouette_score
 import json
+import os
+import joblib
 
 from src.infrastructure.database.db import get_session, ModeloEntrenado, EstadisticaClustering
 from src.application.cuestionario_service import NOMBRES_DIMENSION
@@ -120,6 +122,14 @@ def ejecutar_clustering_en_memoria(df_vectores: pd.DataFrame, k: int, covariance
         # Desactivar anteriores
         session.query(ModeloEntrenado).update({ModeloEntrenado.activo: False})
         
+        # Generar nombre y ruta de archivo
+        timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        nombre_archivo = f"gmm_{k}c_{timestamp_str}.pkl"
+        ruta_archivo = os.path.join("models", nombre_archivo)
+        
+        # Guardar el binario con joblib
+        joblib.dump(modelo, ruta_archivo)
+
         # Registrar nuevo modelo
         registro_modelo = ModeloEntrenado(
             algoritmo="GaussianMixture",
@@ -129,6 +139,7 @@ def ejecutar_clustering_en_memoria(df_vectores: pd.DataFrame, k: int, covariance
             bic=bic,
             aic=aic,
             activo=True,
+            ruta_archivo=ruta_archivo,
             fecha_creacion=datetime.utcnow(),
             fecha_modificacion=datetime.utcnow()
         )
@@ -166,3 +177,41 @@ def ejecutar_clustering_en_memoria(df_vectores: pd.DataFrame, k: int, covariance
         "aic": aic,
         "n_registros": total_registros
     }
+
+
+def cargar_y_aplicar_modelo(df_vectores: pd.DataFrame, modelo_id: int):
+    """
+    Carga un modelo entrenado desde el binario en disco y lo aplica a los datos proporcionados.
+    """
+    session = get_session()
+    try:
+        registro_modelo = session.query(ModeloEntrenado).filter_by(id=modelo_id).first()
+        if not registro_modelo or not registro_modelo.ruta_archivo or not os.path.exists(registro_modelo.ruta_archivo):
+            raise FileNotFoundError("No se encontró el archivo físico del modelo.")
+            
+        modelo = joblib.load(registro_modelo.ruta_archivo)
+        bic_historico = registro_modelo.bic
+        aic_historico = registro_modelo.aic
+        
+        # Cargar etiquetas cualitativas desde estadisticas
+        estadisticas = session.query(EstadisticaClustering).filter_by(modelo_id=modelo_id).all()
+        etiquetas_texto = {}
+        for est in estadisticas:
+            datos = json.loads(est.patrones_json)
+            etiquetas_texto[est.cluster_index] = datos.get("etiqueta", f"Clúster {est.cluster_index}")
+            
+    finally:
+        session.close()
+        
+    X = df_vectores[DIMENSIONES].values
+    etiquetas_cluster = modelo.predict(X)
+    probabilidades = modelo.predict_proba(X)
+    
+    return {
+        "etiquetas_asignadas": etiquetas_cluster.tolist(),
+        "probabilidades": probabilidades.tolist(),
+        "etiquetas_texto": etiquetas_texto,
+        "bic": bic_historico,
+        "aic": aic_historico
+    }
+
